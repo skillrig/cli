@@ -139,6 +139,7 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] T007 Create base models/entities that all stories depend on
 - [ ] T008 Configure error handling and logging infrastructure
 - [ ] T009 Setup environment configuration management
+- [ ] T009a [P] Record + secret-scrub ≥1 real fixture per integration boundary into `testdata/` (git `ls-tree`/tree-SHA, `mise` resolve, GitHub `bump --pr` response, generated `index.json`); add go-vcr cassettes for the GitHub path (Constitution III — Ground-Truth Anchoring)
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -152,19 +153,19 @@ Examples of foundational tasks (adjust based on your project):
 
 ### Tests for User Story 1 (REQUIRED — Quickstart-as-Contract, Constitution II) ⚠️
 
-**NOTE: Write these tests FIRST, ensure they FAIL before implementation. Each quickstart.md scenario for this story MUST map 1:1 to a Go integration test.**
+**NOTE: Write these tests FIRST, ensure they FAIL before implementation. Each quickstart.md scenario for this story MUST map 1:1 to a Go integration test. For output-producing commands, tests MUST assert output SHAPE (Constitution II), not just content: line-bound for compact output, parse + structural-completeness for `--json`, 3-part + exit-code for errors.**
 
-- [ ] T010 [P] [US1] Integration test `TestQuickstart_[scenario]` (from quickstart.md) in [pkg]/[name]_test.go
+- [ ] T010 [P] [US1] Integration test `TestQuickstart_[scenario]` (from quickstart.md) with output-shape assertions in [pkg]/[name]_test.go
 - [ ] T011 [P] [US1] Unit test for non-obvious internal logic (only where genuinely useful) in [pkg]/[name]_test.go
 
 ### Implementation for User Story 1
 
-- [ ] T012 [P] [US1] Create [Entity1] model in src/models/[entity1].py
-- [ ] T013 [P] [US1] Create [Entity2] model in src/models/[entity2].py
-- [ ] T014 [US1] Implement [Service] in src/services/[service].py (depends on T012, T013)
-- [ ] T015 [US1] Implement [endpoint/feature] in src/[location]/[file].py
-- [ ] T016 [US1] Add validation and error handling
-- [ ] T017 [US1] Add logging for user story 1 operations
+- [ ] T012 [P] [US1] Create [Entity1] type in internal/[pkg]/[entity1].go
+- [ ] T013 [P] [US1] Create [Entity2] type in internal/[pkg]/[entity2].go
+- [ ] T014 [US1] Implement [logic] in internal/[pkg]/[file].go (depends on T012, T013)
+- [ ] T015 [US1] Wire [command/subcommand] in cmd/skillrig/[command].go
+- [ ] T016 [US1] Add validation and errors-as-navigation handling (what/why/fix + exit code)
+- [ ] T017 [US1] Ensure execution logic is output-format-independent (presentation vs execution)
 
 **Checkpoint**: At this point, User Story 1 should be fully functional and testable independently
 
@@ -176,16 +177,16 @@ Examples of foundational tasks (adjust based on your project):
 
 **Independent Test**: [How to verify this story works on its own]
 
-### Tests for User Story 2 (REQUIRED — Quickstart-as-Contract, Constitution II) ⚠️
+### Tests for User Story 2 (REQUIRED — Quickstart-as-Contract + output-shape assertions, Constitution II) ⚠️
 
-- [ ] T018 [P] [US2] Integration test `TestQuickstart_[scenario]` (from quickstart.md) in [pkg]/[name]_test.go
+- [ ] T018 [P] [US2] Integration test `TestQuickstart_[scenario]` (from quickstart.md) with output-shape assertions in [pkg]/[name]_test.go
 - [ ] T019 [P] [US2] Unit test for non-obvious internal logic (only where genuinely useful) in [pkg]/[name]_test.go
 
 ### Implementation for User Story 2
 
-- [ ] T020 [P] [US2] Create [Entity] model in src/models/[entity].py
-- [ ] T021 [US2] Implement [Service] in src/services/[service].py
-- [ ] T022 [US2] Implement [endpoint/feature] in src/[location]/[file].py
+- [ ] T020 [P] [US2] Create [Entity] type in internal/[pkg]/[entity].go
+- [ ] T021 [US2] Implement [logic] in internal/[pkg]/[file].go
+- [ ] T022 [US2] Wire [command/subcommand] in cmd/skillrig/[command].go
 - [ ] T023 [US2] Integrate with User Story 1 components (if needed)
 
 **Checkpoint**: At this point, User Stories 1 AND 2 should both work independently
@@ -198,16 +199,16 @@ Examples of foundational tasks (adjust based on your project):
 
 **Independent Test**: [How to verify this story works on its own]
 
-### Tests for User Story 3 (REQUIRED — Quickstart-as-Contract, Constitution II) ⚠️
+### Tests for User Story 3 (REQUIRED — Quickstart-as-Contract + output-shape assertions, Constitution II) ⚠️
 
-- [ ] T024 [P] [US3] Integration test `TestQuickstart_[scenario]` (from quickstart.md) in [pkg]/[name]_test.go
+- [ ] T024 [P] [US3] Integration test `TestQuickstart_[scenario]` (from quickstart.md) with output-shape assertions in [pkg]/[name]_test.go
 - [ ] T025 [P] [US3] Unit test for non-obvious internal logic (only where genuinely useful) in [pkg]/[name]_test.go
 
 ### Implementation for User Story 3
 
-- [ ] T026 [P] [US3] Create [Entity] model in src/models/[entity].py
-- [ ] T027 [US3] Implement [Service] in src/services/[service].py
-- [ ] T028 [US3] Implement [endpoint/feature] in src/[location]/[file].py
+- [ ] T026 [P] [US3] Create [Entity] type in internal/[pkg]/[entity].go
+- [ ] T027 [US3] Implement [logic] in internal/[pkg]/[file].go
+- [ ] T028 [US3] Wire [command/subcommand] in cmd/skillrig/[command].go
 
 **Checkpoint**: All user stories should now be independently functional
 
@@ -221,12 +222,13 @@ Examples of foundational tasks (adjust based on your project):
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] TXXX [P] Documentation updates in docs/
+- [ ] TXXX [P] Documentation updates in docs/ — sync docs/design/ for any CLI pattern/flag/integrity change (Constitution: Architecture & CLI Design)
+- [ ] TXXX Pattern-compliance: classify each new/changed command against a cli.md pattern and complete the [pattern-gate checklist](../../docs/design/checklist-template.md) (Constitution IV)
+- [ ] TXXX [P] Skill–CLI Co-Evolution: update the command's skill (keywords matching real user phrasing + failure modes) and run trigger evals via `.claude/skills/skill-creator/scripts/run_eval.py`; verify no undertriggering (Constitution IX)
 - [ ] TXXX Code cleanup and refactoring
-- [ ] TXXX Performance optimization across all stories
 - [ ] TXXX [P] Additional unit tests for non-obvious internal logic
 - [ ] TXXX Security hardening
-- [ ] TXXX Confirm full quickstart.md suite passes (`go test ./...` — all `TestQuickstart_*` green)
+- [ ] TXXX Confirm full quickstart.md suite passes (`go test ./...` — all `TestQuickstart_*` green, including output-shape assertions)
 
 ---
 
@@ -250,8 +252,13 @@ Examples of foundational tasks (adjust based on your project):
 ### Within Each User Story
 
 - Quickstart-derived integration tests MUST be written and FAIL before implementation (Constitution II)
-- Models before services
-- Services before endpoints
+- Types/models before logic
+- Logic before command wiring
 - Core implementation before integration
-- **Definition of Done**: a story is DONE only when its `quickstart.md` scenarios match the user stories AND the corresponding `TestQuickstart_*` integration tests pass
+- **Definition of Done**: a story is DONE only when ALL hold —
+  1. its `quickstart.md` scenarios match the user stories AND the corresponding `TestQuickstart_*` integration tests pass;
+  2. output-producing tests carry shape assertions, not content-only checks (Constitution II);
+  3. ≥1 real recorded fixture exists for each integration boundary the story touches (Constitution III);
+  4. each new/changed command is pattern-classified via the pattern-gate checklist (Constitution IV);
+  5. the command's skill is updated and trigger-eval-verified (Constitution IX)
 - Story complete before moving to next priority

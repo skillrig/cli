@@ -18,6 +18,13 @@
   - Tested independently
   - Deployed independently
   - Demonstrated to users independently
+
+  OUTPUT-SHAPE GUIDANCE (Constitution II): when an acceptance scenario involves
+  command output, state the OBSERVABLE SHAPE, not just content — so it can become
+  a shape-asserting test rather than a `strings.Contains` check. Examples:
+    - "Then the compact listing is ≤ N+5 lines, one per skill, ending with a footer hint"
+    - "Then `--json` parses and each entry contains version/commit/treeSha/requires"
+    - "Then on failure stderr names what-failed + why + a suggested fix, and exit code is 2"
 -->
 
 ### User Story 1 - [Brief Title] (Priority: P1)

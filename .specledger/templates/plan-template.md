@@ -20,7 +20,7 @@
 **Language/Version**: [e.g., Python 3.11, Swift 5.9, Rust 1.75 or NEEDS CLARIFICATION]  
 **Primary Dependencies**: [e.g., FastAPI, UIKit, LLVM or NEEDS CLARIFICATION]  
 **Storage**: [if applicable, e.g., PostgreSQL, CoreData, files or N/A]  
-**Testing**: Go `go test` (standard) — quickstart.md scenarios become `TestQuickstart_<scenario>` integration tests (Constitution II); unit tests for non-obvious internal logic  
+**Testing**: Go `go test` (standard) — quickstart.md scenarios become `TestQuickstart_<scenario>` integration tests with output-shape assertions (Constitution II); unit tests via `httptest`/go-vcr cassettes; ≥1 real recorded fixture per integration boundary, secret-scrubbed (Constitution III)  
 **Target Platform**: [e.g., Linux server, iOS 15+, WASM or NEEDS CLARIFICATION]
 **Project Type**: [single/web/mobile - determines source structure]  
 **Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps or NEEDS CLARIFICATION]  
@@ -31,15 +31,17 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-Verify compliance with principles from `.specledger/memory/constitution.md`:
+Verify compliance with principles from `.specledger/memory/constitution.md` (v2.1.0, nine principles):
 
 - [ ] **I. Specification-First**: Spec.md complete with prioritized user stories before planning
-- [ ] **II. Quickstart-as-Contract**: quickstart.md scenarios authored as executable steps, each mapping 1:1 to a Go integration test (`TestQuickstart_<scenario>`); acceptance lives at the integration layer
-- [ ] **III. Agent-First CLI Design**: New/changed commands conform to [docs/design/cli.md](../../docs/design/cli.md) (progressive `--help`, errors-as-navigation, two-level output, standard flags, consume-only, single `skillcore` for integrity primitives)
-- [ ] **IV. Code Quality (Go)**: `go test` is the test framework; `gofmt`/`go vet`/lint pass; execution logic independent of output format
-- [ ] **V. Simplicity (YAGNI)**: No premature abstraction; dependencies/indirection justified by a concrete requirement
+- [ ] **II. Quickstart-as-Contract**: quickstart.md scenarios authored as executable steps, each mapping 1:1 to a Go integration test (`TestQuickstart_<scenario>`); acceptance lives at the integration layer. **Output-shape assertions planned** — line-bound for compact human output, parse + structurally-complete for `--json`, 3-part (what/why/fix) + exit-code for errors (never content-only `strings.Contains`)
+- [ ] **III. Ground-Truth Anchoring**: data-model.md cites ≥1 *real recorded* sample per integration boundary (git `ls-tree`/tree-SHA, `mise` resolve, GitHub `bump --pr` response, generated `index.json`), secret-scrubbed; unit tests via `httptest`/go-vcr cassettes, E2E via the real binary
+- [ ] **IV. Agent-First CLI Design**: New/changed commands conform to [docs/design/cli.md](../../docs/design/cli.md) (progressive `--help`, errors-as-navigation, two-level output, standard flags, consume-only, single `skillcore` for integrity primitives) and are classified against a cli.md command pattern via the [pattern-gate checklist](../../docs/design/checklist-template.md)
+- [ ] **V. Code Quality (Go)**: `go test` is the test framework; `gofmt`/`go vet`/lint pass; execution logic independent of output format
+- [ ] **VI–VIII. Simplicity (YAGNI / Shortest Path to MVP / Simplicity Over Cleverness)**: no premature abstraction; minimum viable implementation; boring obvious Go over clever code; dependencies/indirection justified by a concrete requirement
+- [ ] **IX. Skill–CLI Co-Evolution**: new/changed commands have a planned skill update (keywords matching real user phrasing + failure modes) and a trigger-eval task using `.claude/skills/skill-creator/` (`scripts/run_eval.py`)
 
-**Complexity Violations** (if any, justify in Complexity Tracking table below):
+**Complexity Violations** (if any, justify against Principles VI–VIII in the Complexity Tracking table below):
 - None identified / [List violations and justifications]
 
 ## Project Structure
@@ -58,49 +60,35 @@ specledger/[###-feature]/
 
 ### Source Code (repository root)
 <!--
-  ACTION REQUIRED: Replace the placeholder tree below with the concrete layout
-  for this feature. Delete unused options and expand the chosen structure with
-  real paths (e.g., apps/admin, packages/something). The delivered plan must
-  not include Option labels.
+  ACTION REQUIRED: Expand the Go layout below with the concrete packages this
+  feature touches. skillrig is a single Go module; the generic CLI's own
+  internals live here (the org ORIGIN's skills + backing CLIs live elsewhere —
+  see architecture.md). Add/rename packages as the feature requires; do not
+  introduce a non-Go layout (Constitution V).
 -->
 
 ```text
-# [REMOVE IF UNUSED] Option 1: Single project (DEFAULT)
-src/
-├── models/
-├── services/
-├── cli/
-└── lib/
+cmd/
+└── skillrig/                 # main package — Cobra root + subcommand wiring
 
-tests/
-├── contract/
-├── integration/
-└── unit/
+internal/
+├── skillcore/                # THE single source of tree-SHA + manifest logic
+│                             #   (verify, bump, doctor all dispatch here — cli.md AP-04)
+├── config/                   # origin resolution: env > project > global (one resolver — AP-06)
+├── lock/                     # skills-lock.json read/write
+├── index/                    # index.json walk + compare (bump)
+├── client/                   # client registry: client → path(s) → link-or-copy (multi-client)
+└── <feature-pkg>/            # this feature's package(s)
 
-# [REMOVE IF UNUSED] Option 2: Web application (when "frontend" + "backend" detected)
-backend/
-├── src/
-│   ├── models/
-│   ├── services/
-│   └── api/
-└── tests/
+testdata/                     # real recorded fixtures per boundary, secret-scrubbed (Constitution III)
+│                             #   e.g. git ls-tree output, mise resolve, GitHub bump-PR response
+└── cassettes/                # go-vcr cassettes for the GitHub path (unit tier)
 
-frontend/
-├── src/
-│   ├── components/
-│   ├── pages/
-│   └── services/
-└── tests/
-
-# [REMOVE IF UNUSED] Option 3: Mobile + API (when "iOS/Android" detected)
-api/
-└── [same as backend above]
-
-ios/ or android/
-└── [platform-specific structure: feature modules, UI flows, platform tests]
+# Tests live beside the code as Go convention dictates (pkg/foo_test.go).
+# Quickstart-as-Contract integration/E2E tests: TestQuickstart_<scenario> invoking the real binary.
 ```
 
-**Structure Decision**: [Document the selected structure and reference the real
+**Structure Decision**: [Document the selected packages and reference the real
 directories captured above]
 
 ## Complexity Tracking
