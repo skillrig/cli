@@ -33,9 +33,9 @@ Generate actionable, dependency-ordered tasks from the implementation plan. Task
 1. **Setup**: Run `sl spec info --json` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute.
 
 2. **Load design documents**: Read from FEATURE_DIR:
-   - **Required**: plan.md (tech stack, libraries, structure), spec.md (user stories with priorities)
-   - **Optional**: data-model.md (entities), contracts/ (API endpoints), research.md (decisions), quickstart.md (test scenarios)
-   - Note: Not all projects have all documents. Generate tasks based on what's available.
+   - **Required**: plan.md (tech stack, libraries, structure), spec.md (user stories with priorities), quickstart.md (executable acceptance scenarios — the contract per Constitution II)
+   - **Optional**: data-model.md (entities), contracts/ (API endpoints), research.md (decisions)
+   - Note: Not all projects have all documents. Generate tasks based on what's available — but quickstart.md is the acceptance contract; if it is missing, flag it and recommend re-running `/specledger.plan` before generating tasks.
 
 3. *** Epic Creation**: From spec.md, create an epic using `sl issue` for the feature using the feature name from plan.md.
    - Use the CLI `sl issue create` to create one top-level issue of type `epic`
@@ -59,13 +59,13 @@ Generate actionable, dependency-ordered tasks from the implementation plan. Task
        - Group all tasks needed to complete JUST that story
        - Include models, services, endpoints, UI components specific to that story
        - Mark which tasks depends on others
-       - If tests requested: Include tests specific to that story
+       - Include the quickstart-derived `TestQuickstart_<scenario>` integration test(s) for that story
      - Polish/Integration tasks (cross-cutting concerns)
-   - **Tests are OPTIONAL**: Only generate test tasks if explicitly requested in the feature spec or user asks for TDD approach
+   - **Tests are REQUIRED (Constitution II)**: For each user story, every quickstart.md scenario maps 1:1 to a Go integration test task; these are the acceptance gate. Unit tests are secondary — add only for non-obvious internal logic.
    - Apply task rules:
      - Different files (no dependencies) = allow parallel
      - Same file = sequential requires dependency
-     - If tests requested: Tests before implementation (TDD order)
+     - Quickstart integration tests written first and FAILING before implementation (TDD order)
    - Number tasks sequentially (T001, T002...)
    - Generate dependency graph showing user story completion order
    - Create parallel execution examples per user story
@@ -99,7 +99,7 @@ Generate actionable, dependency-ordered tasks from the implementation plan. Task
             - `spec:<feature-slug>`
    - Phase 2: Foundational tasks (blocking prerequisites for all user stories)
    - Phase 3+: One phase per user story (in priority order from spec.md)
-     - Each phase includes: story goal, independent test criteria, tests (if requested), implementation tasks
+     - Each phase includes: story goal, independent test criteria, quickstart-derived integration tests (required), implementation tasks
      - Clear [Story] labels (US1, US2, US3...) for each task
      - Issue dependencies to identify parallelizable tasks within each story
      - Checkpoint markers after each story phase
@@ -150,7 +150,7 @@ The tasks.md should be immediately executable - each task must be specific enoug
 
 ## Task Generation Rules
 
-**IMPORTANT**: Tests are optional. Only generate test tasks if the user explicitly requested testing or TDD approach in the feature specification.
+**IMPORTANT**: Tests are REQUIRED (Constitution II — Quickstart-as-Contract). Every quickstart.md scenario must produce a `TestQuickstart_<scenario>` Go integration test task, and a story's Definition of Done includes those tests passing AND the quickstart scenarios matching the user stories. Unit tests are added only for non-obvious internal logic.
 
 **CRITICAL**: Tasks MUST be organized by user story to enable independent implementation and testing.
 
@@ -160,12 +160,12 @@ The tasks.md should be immediately executable - each task must be specific enoug
      - Models needed for that story
      - Services needed for that story
      - Endpoints/UI needed for that story
-     - If tests requested: Tests specific to that story
+     - The quickstart-derived `TestQuickstart_<scenario>` integration test(s) for that story (required)
    - Mark story dependencies (most stories should be independent)
 
 2. **From Contracts**:
    - Map each contract/endpoint → to the user story it serves
-   - If tests requested: Each contract → contract test task [P] before implementation in that story's phase
+   - Each contract/endpoint exercised by a quickstart scenario → covered by that story's `TestQuickstart_<scenario>` integration test [P] before implementation
 
 3. **From Data Model**:
    - Map each entity → to the user story(ies) that need it
@@ -183,7 +183,7 @@ The tasks.md should be immediately executable - each task must be specific enoug
    - Phase 1: Setup (project initialization)
    - Phase 2: Foundational (blocking prerequisites - must complete before user stories)
    - Phase 3+: User Stories in priority order (P1, P2, P3...)
-     - Within each story: Tests (if requested) → Models → Services → Endpoints → Integration
+     - Within each story: Quickstart integration tests (failing) → Models → Services → Endpoints → Integration
    - Final Phase: Polish & Cross-Cutting Concerns
    - **DO NOT generate a linear checklist** — build a **task graph** using dependencies
    - Each user story phase should be a complete, independently testable increment
@@ -269,6 +269,9 @@ When creating issues, derive Definition of Done items from the acceptance criter
 1. **Extract acceptance criteria**: Parse each "Then" clause from acceptance scenarios in spec.md
 2. **Convert to checklist items**: Transform each criterion into a verifiable statement
 3. **Use `--dod` flag for each item**: Add each item as a separate `--dod` flag
+4. **Add the Quickstart-as-Contract DoD items (Constitution II)** to every story's tasks:
+   - `--dod "quickstart.md scenario(s) match this story's user stories"`
+   - `--dod "TestQuickstart_<scenario> integration test passes (go test)"`
 
 **Example conversion**:
 - Spec acceptance: "Then the user can log in with valid credentials"

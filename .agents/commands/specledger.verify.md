@@ -22,7 +22,9 @@ Perform cross-artifact consistency and quality analysis to identify gaps before 
 
 ## Goal
 
-Identify inconsistencies, duplications, ambiguities, and underspecified items across the three core artifacts (`spec.md`, `plan.md`, `tasks.md`) before implementation. This command MUST run only after `/specledger.tasks` has successfully produced a complete `tasks.md`.
+Identify inconsistencies, duplications, ambiguities, and underspecified items across the core artifacts (`spec.md`, `plan.md`, `tasks.md`, and `quickstart.md`) before implementation. This command MUST run only after `/specledger.tasks` has successfully produced a complete `tasks.md`.
+
+**Constitution II (Quickstart-as-Contract) is in scope**: `quickstart.md` is the acceptance contract. Verification MUST confirm that every quickstart scenario maps to a user story (and vice versa) and that tasks include the corresponding `TestQuickstart_<scenario>` integration tests. Drift between quickstart and user stories is a CRITICAL constitution violation.
 
 ## Operating Constraints
 
@@ -39,8 +41,9 @@ Run `sl spec info --json --require-tasks --include-tasks` once from repo root an
 - SPEC = FEATURE_DIR/spec.md
 - PLAN = FEATURE_DIR/plan.md
 - TASKS = FEATURE_DIR/tasks.md
+- QUICKSTART = FEATURE_DIR/quickstart.md
 
-Abort with an error message if any required file is missing (instruct the user to run missing prerequisite command).
+Abort with an error message if any required file is missing (instruct the user to run missing prerequisite command). If `quickstart.md` is missing, this is itself a CRITICAL finding (Constitution II requires it) — recommend re-running `/specledger.plan`.
 
 ### 2. Load Artifacts (Progressive Disclosure)
 
@@ -74,6 +77,11 @@ Refer to query semantics and...
    - Labels referencing requirements or stories
 - Use `sl issue list` to verify cross task dependencies
 
+**From quickstart.md:**
+
+- Each acceptance scenario (the steps a user/agent runs and the expected output/exit code)
+- Whether each scenario is written executably (concrete invocations, observable I/O) vs. prose
+
 **From constitution:**
 
 - Load `.specledger/memory/constitution.md` for principle validation
@@ -85,6 +93,7 @@ Create internal representations (do not include raw artifacts in output):
 - **Requirements inventory**: Each functional + non-functional requirement with a stable key (derive slug based on imperative phrase; e.g., "User can upload file" → `user-can-upload-file`)
 - **User story/action inventory**: Discrete user actions with acceptance criteria
 - **Task coverage mapping**: Map each task to one or more requirements or stories (inference by keyword / explicit reference patterns like IDs or key phrases)
+- **Quickstart scenario inventory**: Each quickstart scenario with the user story it exercises and the `TestQuickstart_<scenario>` test that should cover it
 - **Constitution rule set**: Extract principle names and MUST/SHOULD normative statements
 
 ### 4. Detection Passes (Token-Efficient Analysis)
@@ -125,11 +134,18 @@ Focus on high-signal findings. Limit to 50 findings total; aggregate remainder i
 - Task ordering contradictions (e.g., integration tasks before foundational setup tasks without dependency note)
 - Conflicting requirements (e.g., one requires Next.js while other specifies Vue)
 
+#### G. Quickstart-as-Contract Consistency (Constitution II)
+
+- **Scenario ↔ user story mapping**: Every quickstart scenario must trace to a user story in spec.md; every user story should have at least one quickstart scenario. Either gap is CRITICAL.
+- **Executable form**: Quickstart scenarios must be written executably (concrete CLI invocations, observable output, exit codes) — prose-only scenarios that cannot become a `go test` are a HIGH finding.
+- **Test task coverage**: Each quickstart scenario must have a corresponding `TestQuickstart_<scenario>` integration test task in tasks.md. A scenario with no test task is CRITICAL.
+- **DoD presence**: Story tasks should carry the quickstart-matching + integration-test-passing DoD items.
+
 ### 5. Severity Assignment
 
 Use this heuristic to prioritize findings:
 
-- **CRITICAL**: Violates constitution MUST, missing core spec artifact, or requirement with zero coverage that blocks baseline functionality
+- **CRITICAL**: Violates constitution MUST, missing core spec artifact (incl. missing `quickstart.md`), quickstart↔user-story drift, a quickstart scenario with no `TestQuickstart_<scenario>` test task, or requirement with zero coverage that blocks baseline functionality
 - **HIGH**: Duplicate or conflicting requirement, ambiguous security/performance attribute, untestable acceptance criterion
 - **MEDIUM**: Terminology drift, missing non-functional task coverage, underspecified edge case
 - **LOW**: Style/wording improvements, minor redundancy not affecting execution order

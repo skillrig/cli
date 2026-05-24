@@ -20,7 +20,7 @@
 **Language/Version**: [e.g., Python 3.11, Swift 5.9, Rust 1.75 or NEEDS CLARIFICATION]  
 **Primary Dependencies**: [e.g., FastAPI, UIKit, LLVM or NEEDS CLARIFICATION]  
 **Storage**: [if applicable, e.g., PostgreSQL, CoreData, files or N/A]  
-**Testing**: [e.g., pytest, XCTest, cargo test or NEEDS CLARIFICATION]  
+**Testing**: Go `go test` (standard) — quickstart.md scenarios become `TestQuickstart_<scenario>` integration tests (Constitution II); unit tests for non-obvious internal logic  
 **Target Platform**: [e.g., Linux server, iOS 15+, WASM or NEEDS CLARIFICATION]
 **Project Type**: [single/web/mobile - determines source structure]  
 **Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps or NEEDS CLARIFICATION]  
@@ -33,13 +33,11 @@
 
 Verify compliance with principles from `.specledger/memory/constitution.md`:
 
-- [ ] **Specification-First**: Spec.md complete with prioritized user stories
-- [ ] **Test-First**: Test strategy defined (contract + integration tests planned)
-- [ ] **Code Quality**: Linting/formatting tools identified in Technical Context
-- [ ] **UX Consistency**: User flows documented in spec.md acceptance scenarios
-- [ ] **Performance**: Metrics defined in Technical Context (response time, throughput, memory)
-- [ ] **Observability**: Logging/metrics strategy documented
-- [ ] **Issue Tracking**: Epic created with `sl issue create --type epic` and linked to spec
+- [ ] **I. Specification-First**: Spec.md complete with prioritized user stories before planning
+- [ ] **II. Quickstart-as-Contract**: quickstart.md scenarios authored as executable steps, each mapping 1:1 to a Go integration test (`TestQuickstart_<scenario>`); acceptance lives at the integration layer
+- [ ] **III. Agent-First CLI Design**: New/changed commands conform to [docs/design/cli.md](../../docs/design/cli.md) (progressive `--help`, errors-as-navigation, two-level output, standard flags, consume-only, single `skillcore` for integrity primitives)
+- [ ] **IV. Code Quality (Go)**: `go test` is the test framework; `gofmt`/`go vet`/lint pass; execution logic independent of output format
+- [ ] **V. Simplicity (YAGNI)**: No premature abstraction; dependencies/indirection justified by a concrete requirement
 
 **Complexity Violations** (if any, justify in Complexity Tracking table below):
 - None identified / [List violations and justifications]
@@ -53,7 +51,7 @@ specledger/[###-feature]/
 ├── plan.md              # This file (/specledger.plan command output)
 ├── research.md          # Phase 0 output (/specledger.plan command)
 ├── data-model.md        # Phase 1 output (/specledger.plan command)
-├── quickstart.md        # Phase 1 output (/specledger.plan command)
+├── quickstart.md        # Phase 1 output — executable integration-test scenarios (Constitution II); each maps 1:1 to a Go TestQuickstart_<scenario>
 ├── contracts/           # Phase 1 output (/specledger.plan command)
 └── tasks.md             # Phase 2 output (/specledger.tasks command - NOT created by /specledger.plan)
 ```
