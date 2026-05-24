@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "skill-creator": {
+      "source": "anthropics/skills",
+      "ref": "HEAD",
+      "sourceType": "github",
+      "computedHash": "b2bfe91d69ca99994c0566baede889e7d2b9bb8791c6b6106c5d387392f717f6"
+    }
+  }
+}

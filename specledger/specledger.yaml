@@ -1,0 +1,21 @@
+version: 1.0.0
+project:
+    name: skillrig-cli
+    short_code: sk
+    created: 2026-05-24T13:39:16.690278+08:00
+    modified: 2026-05-24T13:39:16.690286+08:00
+    version: 0.1.0
+playbook:
+    name: specledger
+    version: 1.0.0
+    applied_at: 2026-05-24T13:39:16.690278+08:00
+    structure:
+        - .specledger/
+        - .gitattributes
+        - AGENTS.md
+        - mise.toml
+template_version: 1.2.2
+task_tracker:
+    choice: builtin
+    enabled_at: 2026-05-24T13:39:16.690278+08:00
+artifact_path: specledger/
