@@ -361,6 +361,14 @@ The execution layer handles command routing, the shared `skillcore` primitives (
 
 ---
 
+## Borrowed Ideas (vNext, additive — not yet adopted)
+
+Harvested from the `agentic-cli-design` skill (tumf/skills). These are **additive** enhancements that this document does not currently mandate; they are recorded here so the idea isn't lost, grounded in our own authoritative contract. **This document remains authoritative.** Where the external skill conflicts with the rules above it was deliberately **not** adopted — specifically: our exit codes are `0/1/2/3` per [Exit Codes](#exit-codes) (not the skill's `2=invalid-args/3=auth/4=retryable`); **human compact output is the default** with `--json` opt-in (not JSON-primary, see [Two-Level Output](#principle-3-two-level-output-design)); and **errors are prose what/why/fix to stderr with the raw cause preserved** (not structured JSON errors, see [Principle 2](#principle-2-error-messages-as-navigation)).
+
+- **Machine-readable introspection beyond help text.** Today Progressive Discovery ([Principle 1](#principle-1-progressive-discovery)) is help-text based (Cobra-generated). A future enhancement could let the CLI emit its own spec for agents to parse: `commands --json` (command/arg tree), `schema --command <c> --output json-schema` (per-command JSON Schema), `--help --json`, and top-level fixed fields `schemaVersion` / `type` / `ok`. Pull this forward only if agents need to parse the command tree programmatically (MCP-surface adjacency, architecture §2).
+- **`install-skills` verb.** The CLI could ship *its own* usage skill from `<project>/skills` into `.agents/skills` (or `--claude` → `.claude/skills`, `--global` → home). This is a natural mechanism for **Constitution IX (Skill–CLI Co-Evolution)** — skillrig installing the agent skill that teaches its own usage. Note this is the CLI's *own* skill, distinct from skillrig's core job of vendoring *org* skills; keep the two surfaces clearly separated and consume-only (§2b).
+- **Agent-friendliness scorecard (0/1/2 per principle, 14 max).** A lightweight rubric usable as an extra review gate during `/specledger.checkpoint` to score a command's agent-readiness. Advisory only — it never becomes a blocking CI gate (that role belongs to `verify`/`lint`, R11/N1).
+
 ## References
 
 - [Technical Architecture](../../../../architecture.md)
