@@ -14,29 +14,40 @@
 
 ## D2 — Global config location
 
-**Decision**: `$XDG_CONFIG_HOME/skillrig/config.toml`, falling back to `~/.config/skillrig/config.toml` on **all** platforms. Do NOT use `os.UserConfigDir()`.
+**Decision**: `$XDG_CONFIG_HOME/skillrig/config.toml`, falling back to `~/.config/skillrig/config.toml` on **all** platforms. Resolve `~` via stdlib `os.UserHomeDir()` (cross-platform). Do NOT use `os.UserConfigDir()`.
 **Rationale**: Architecture §2d names `~/.config/skillrig/config.toml` explicitly, git-style. `os.UserConfigDir()` returns `~/Library/Application Support` on macOS and `%AppData%` on Windows, which would diverge from the documented path. Consistency with the documented contract beats per-OS idiom here.
-**Alternatives**: `os.UserConfigDir()` (rejected — diverges from the architecture path on macOS/Windows).
+
+**OS / shell support (v0 note — review comment ec7c2bdb).** `XDG_CONFIG_HOME` is an environment variable from the freedesktop XDG Base Directory spec — it is **not shell-specific** (any process inherits it if the environment sets it; shells/login managers commonly export it on Linux):
+- **Linux/BSD**: native convention. Honored when set, else `~/.config`. ✅ idiomatic.
+- **macOS**: XDG is not an OS standard (Apple uses `~/Library/Application Support`), but `XDG_CONFIG_HOME` is usually unset so we land on `~/.config`, which `git`/`gh` also use. ✅ works, widely accepted for CLI tools.
+- **Windows**: `~/.config` is non-idiomatic (the convention is `%AppData%`). `os.UserHomeDir()` returns `%USERPROFILE%`, so we'd write `%USERPROFILE%\.config\skillrig\config.toml`. ⚠️ functional but unconventional — **explicit v0 caveat**; revisit Windows path idiom if/when Windows is a first-class target.
+**Alternatives**: `os.UserConfigDir()` (rejected — diverges from the architecture path on macOS/Windows). `adrg/xdg` library (handles per-OS XDG resolution incl. Windows Known Folders) — **deferred**: adds a dependency for what `os.UserHomeDir()` + the `XDG_CONFIG_HOME` env check cover in v0; reconsider when Windows idiomatic paths matter.
 
 ## D3 — Project config discovery (resolution) vs write location (init)
 
-**Decision**:
-- **Resolution** walks up from `cwd` to the nearest ancestor containing `.skillrig/config.toml` (git-style discovery), so any subdirectory of a bound repo resolves the same origin (supports SC-002 "self-describing repo").
-- **`init` (write)** writes to `./.skillrig/config.toml` in the current working directory by default (creating `.skillrig/` if needed, FR-010). It does not attempt to locate a VCS root (no git dependency; offline, simple).
-**Rationale**: Walk-up resolution is what makes the committed config authoritative from anywhere in the tree; writing at cwd keeps `init` dependency-free and predictable. A user running `init` at the repo root (the normal case) gets the expected `<repo>/.skillrig/config.toml`.
-**Alternatives**: cwd-only resolution (rejected — breaks resolution from subdirectories); git-root detection for write (rejected — adds a git dependency for marginal benefit, YAGNI).
+**Decision** (revised per review comment 0aec14ed):
+- **Resolution** walks up from `cwd` to the nearest ancestor containing `.skillrig/config.toml` (git-style discovery), so any subdirectory of a bound repo resolves the same origin (supports SC-002 "self-describing repo"). This is a **pure-filesystem** walk — no subprocess, deterministic, and it still works in a not-yet-`git init`'d directory or an agent sandbox.
+- **`init` (write)** writes to `.skillrig/config.toml` at the **git repository root** when the cwd is inside a git work tree (`git rev-parse --show-toplevel`), otherwise falls back to `./.skillrig/config.toml` at cwd (creating `.skillrig/` if needed, FR-010).
+**Rationale**: The earlier "no git dependency" framing was wrong for this framework — skillrig is **git-native** (it vendors skills from git origins, architecture §2/§5), so git is a safe baseline assumption and using it to anchor the write at the repo root avoids the foot-gun of writing `.skillrig/` into a random subdirectory. Resolution stays git-*independent* on purpose (faster, no subprocess, robust pre-`git init`), so the two jobs use the right tool each: write = locate the repo root (git when available); resolve = filesystem walk-up.
+**Alternatives**: cwd-only write (rejected — writes config in a subdir if run from one); cwd-only resolution (rejected — breaks resolution from subdirectories); requiring git for *resolution* (rejected — resolution must work offline/subprocess-free and in non-repo dirs).
+**Open**: if `git` is genuinely absent and cwd is not a repo, `init` falls back to cwd — confirm this fallback is acceptable vs. erroring (leaning: fall back, since the resolver finds it by walk-up regardless).
 
-## D4 — Interactive vs non-interactive detection
+## D4 — Interactive vs non-interactive model (flags + detection)
 
-**Decision**: Treat the session as interactive iff **stdin is a character device** — `fileInfo, _ := os.Stdin.Stat(); interactive := fileInfo.Mode()&os.ModeCharDevice != 0`. Stdlib only.
-**Rationale**: No extra dependency; correctly returns false in CI/pipes/agent runners (TTY-less), satisfying FR-006a (prompt only when interactive). Honors agentic-cli-design P2 and cli.md.
-**Alternatives**: `golang.org/x/term.IsTerminal` (works but adds a dependency for what stdlib covers); always-non-interactive (rejected — FR-006a wants a prompt for humans).
+**Decision** (revised per review comment 8019052e):
+- **Flags carry the values**; missing required values (the origin) are *prompted for* when interactive.
+- **Auto-detect** interactivity: a session is interactive iff **stdin is a character device** — `fileInfo, _ := os.Stdin.Stat(); interactive := fileInfo.Mode()&os.ModeCharDevice != 0` (stdlib).
+- **Explicit `--non-interactive` flag** overrides detection: it forces non-interactive even on a TTY, and when a required value is missing it **errors describing exactly which flag(s) to pass** (e.g. "missing origin: pass `--origin OWNER/REPO`"). This gives agents/CI a deterministic "never prompt" switch independent of TTY heuristics.
+- Resolution of "should I prompt?": prompt **iff** value missing AND interactive (TTY) AND not `--non-interactive`; otherwise error with the missing-flag guidance (FR-006a).
+**Rationale**: TTY detection alone is a heuristic; an explicit `--non-interactive` flag is the contract agents rely on (agentic-cli-design P2) and makes the missing-input error path testable. Stdlib detection avoids a dependency.
+**Alternatives**: `golang.org/x/term.IsTerminal` (adds a dep for what stdlib covers); detection-only with no explicit flag (rejected — agents want an explicit switch).
 
-## D5 — Prompting mechanism
+## D5 — Prompting mechanism  ✅ (S1 spike resolved)
 
-**Decision**: When interactive and `--origin` omitted, prompt once on stderr ("Origin (OWNER/REPO): ") and read one line from stdin via `bufio.Scanner`. Stdlib only. Empty/invalid input → usage/config error (exit 1), not a re-prompt loop.
-**Rationale**: Minimal, dependency-free, predictable. The prompt goes to **stderr** so stdout stays clean for any machine consumer (cli.md Rule 5). YAGNI — no `survey`/`promptui`.
-**Alternatives**: `AlecAivazis/survey`, `manifoldco/promptui` (rejected — heavy deps for a single prompt); retry loop (rejected — keep it deterministic and scriptable).
+**Decision**: When prompting is warranted (D4), prompt once on **stderr** (`Origin (OWNER/REPO): `) and read one line via stdlib **`bufio.Scanner`**. Empty/invalid → usage/config error (exit 1), no re-prompt loop. Prompt on stderr keeps stdout clean for machine consumers (cli.md Rule 5).
+**Rationale (resolved by spike S1 — measured)**: see [research/2026-05-24-interactive-prompt-library.md](research/2026-05-24-interactive-prompt-library.md). Measured stripped-binary deltas over our cobra+go-toml/v2 baseline (2.57 MB): stdlib **+0**, promptui **+768 B**, survey **+0.23 MB / +39 modules**, huh **+0.61 MB / +39 modules**. v0 has exactly **one** single-line prompt — a TUI form lib has no UX payoff yet (YAGNI/VI, shortest-path/VII), and stdlib `bufio` is the least likely to ever block an agent on non-TTY stdin (returns EOF immediately) — best fit for IV/agent-safety + V/minimal-deps.
+**Deferred (not now)**: when a command first needs a genuine multi-field interactive form, adopt **`charmbracelet/huh`** (now `v1.0.0` stable; `WithAccessible`/`WithInput`/`RunAccessible(w,r)` give a non-TTY-safe, testable path) — not the unmaintained `survey`. Re-open the spike then to re-confirm the ~0.6 MB / 39-module cost is justified.
+**Alternatives rejected for v0**: `survey` (unmaintained, +0.23 MB, +39 deps); `promptui` (near-zero size but +5 deps and low maintenance for no benefit over stdlib on one line); `huh` (deferred per above).
 
 ## D6 — OWNER/REPO validation
 
@@ -61,9 +72,13 @@
 
 ## D9 — Atomic config write
 
-**Decision**: Write to a temp file in the target dir then `os.Rename` over the destination (rename is atomic on the same filesystem). Preserve a trailing newline; stable key ordering via the struct field order.
+**Decision**: Write to a temp file **in the same target directory** (so it's on the same filesystem/volume) then `os.Rename` over the destination. Preserve a trailing newline; stable key ordering via the struct field order. File mode `0o644`, dir `0o755`.
 **Rationale**: Prevents a torn/corrupt `config.toml` on crash and avoids partial writes the resolver might later read (FR-004). Mirrors architecture open-Q10's lockfile-atomicity guidance, applied to config.
-**Alternatives**: Direct truncating write (rejected — torn-write risk); file locking (rejected — single-writer `init`, not needed; YAGNI).
+**OS requirements (review comment 2bf31175)**:
+- **POSIX (Linux/macOS)**: `rename(2)` is atomic when source and dest are on the same filesystem — hence the temp file goes in the **target dir**, never `os.TempDir()` (which may be a different mount, turning `os.Rename` into a cross-device `EXDEV` error). ✅
+- **Windows**: `os.Rename` maps to `MoveFileEx` with `MOVEFILE_REPLACE_EXISTING` in modern Go, so replace-over-existing works; but a concurrent open handle on the dest (AV scanners, the file open in an editor) can cause a sharing-violation. Acceptable for v0's single-writer `init`; note as a Windows caveat.
+- Create parent dirs (`os.MkdirAll`) before writing; `fsync` the temp file before rename for durability if we later care (deferred — YAGNI for a tiny config).
+**Alternatives**: Direct truncating write (rejected — torn-write risk); temp in `os.TempDir()` (rejected — cross-device rename failure); file locking (rejected — single-writer `init`, not needed; YAGNI).
 
 ## D10 — Cobra command structure
 
@@ -71,8 +86,16 @@
 **Rationale**: Establishes the progressive-discovery skeleton future commands extend. `--origin` as a flag (not positional) reads naturally with `--global` and the prompt fallback.
 **Alternatives**: positional `skillrig init <origin>` (viable, but a flag composes better with `--global` and optional/interactive entry; revisit if usage shows positional is preferred — a desire path per cli.md).
 
+**Config library — viper? (review comment be52d37c)**: **Decision: no viper for v0.** Viper *does* support TOML (it reads via `pelletier/go-toml`), and `cobra`+`viper`+`huh` are mutually compatible (cobra = commands, viper = config layering, huh = interactive forms — three orthogonal libs). But viper's value is generic multi-source config merging, whereas our origin resolution has **specific, contract-bound semantics** (architecture §2d): a named env var (`SKILLRIG_ORIGIN`), filesystem **walk-up** to the nearest project `.skillrig/config.toml`, a fixed global path, blank-env-as-unset, malformed-source-skip, and a single `ResolveOrigin` per AP-06. Viper's `AutomaticEnv`/config-merge does not model walk-up or our precedence cleanly and would fight the contract. Keep `go-toml/v2` (D1) + the hand-rolled resolver (D-contract `resolve.md`) — exact control, fewer deps, trivially table-testable. Revisit viper only if config grows many keys/sources.
+
 ---
 
-## Resolved unknowns
+## Open evaluations / spikes
 
-All Technical Context items are resolved; no remaining `NEEDS CLARIFICATION`. No external network/integration boundaries in this feature, so no httptest/go-vcr (Constitution III applies to the **config.toml** ground-truth fixture instead).
+- **S1 — Interactive prompt library (D5)**: ✅ **resolved** by [research/2026-05-24-interactive-prompt-library.md](research/2026-05-24-interactive-prompt-library.md). Outcome: stdlib `bufio` for v0; defer `charmbracelet/huh` (v1.0.0) to a future multi-field interactive flow. Measured: huh +0.61 MB / +39 modules vs a +0 stdlib baseline.
+
+Everything is resolved; no remaining `NEEDS CLARIFICATION`. No external network/integration boundaries in this feature, so no httptest/go-vcr (Constitution III applies to the **config.toml** ground-truth fixture instead).
+
+## Review trail
+
+Revised per crit review of `research.md` (Session 2026-05-24): D2 (XDG OS/shell support + `os.UserHomeDir`/`adrg/xdg` note), D3 (git is a fair assumption — git-root write, fs walk-up resolve), D4 (explicit `--non-interactive` flag + flag/prompt model), D5 (huh spike S1), D9 (POSIX same-fs + Windows `MoveFileEx` caveats), D10 (viper evaluated, rejected for v0; TOML supported; cobra/viper/huh compatible).
