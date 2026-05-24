@@ -10,9 +10,17 @@
 skillrig is a single generic binary shared by every org; it carries **no baked-in origin**. The "origin" — the org's private git monorepo that is the source of truth for its skills (e.g. `my-org/my-skills`) — is supplied by the consumer at runtime. This feature delivers the two foundational capabilities every later command depends on:
 
 1. A single, shared way to **resolve which origin a command should act against**, using a documented precedence order.
-2. A **`skillrig init`** command that records the chosen origin into committed (or global) configuration, so a repo becomes self-describing for any later human, agent, or CI run.
+2. An **initialization** capability that records the chosen origin into committed (or global) configuration, so a repo becomes self-describing for any later human, agent, or CI run. (The concrete command name is decided at planning — see Clarifications.)
 
 This is the first slice of the CLI, so it also establishes the baseline command experience (self-documenting help, actionable errors, machine-readable output, meaningful exit codes) that all subsequent commands inherit.
+
+## Clarifications
+
+### Session 2026-05-24
+
+- Q: Should the spec name concrete commands (e.g. per architecture.md / cli.md) or stay command-agnostic? → A: Stay command-agnostic. The concrete command surface — names, flags, subcommands — is decided during `/specledger.plan` (research + quickstart.md), grounded in architecture.md and the CLI design docs.
+- Q: What is the scope of origin binding — origin only, or a broader onboarding that also collects repo tags for skill suggestions? → A: Origin only. When the origin is not supplied as an argument in an interactive session, the operation prompts for it; when supplied, it runs non-interactively. No additional onboarding metadata (e.g. repo tags / skill-suggestion data) is collected in this feature — that is deferred to a later version.
+- Q: Is a dedicated config-management command in scope for managing the project config file? → A: No. The config file is hand-editable input; the bind operation writes and updates the origin (re-running with a new origin updates it). The detailed config structure and management guidance live on the project docs website (referenced, not duplicated in this spec).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -88,10 +96,12 @@ A developer or agent runs a command that needs an origin in a repo that was neve
 - **FR-003**: When no source provides an origin, resolution MUST report a distinct "no origin configured" outcome (not a silent empty value) that callers can turn into an actionable error.
 - **FR-004**: Resolution MUST treat an unparseable or origin-less config file as "no origin from that source" and continue down the precedence order, surfacing a clear diagnostic rather than a raw parser error.
 
-**Initialization (`init`)**
+**Initialization / origin binding**
 
 - **FR-005**: The system MUST provide a command that records a chosen origin into the repo's committed project config.
 - **FR-006**: The command MUST accept the origin as an explicit argument so it can run non-interactively (suitable for agents and scripts).
+- **FR-006a**: When the origin is not supplied as an argument in an interactive session, the command MUST prompt for it; when it is supplied, the command MUST NOT prompt (fully non-interactive). In a non-interactive session with no origin supplied, the command MUST fail with a usage/config error (see FR-017, US3).
+- **FR-006b**: The command MUST collect only the origin. It MUST NOT collect or persist any additional onboarding metadata (e.g. repo tags for skill suggestions) — that is deferred to a later version (see Out of Scope).
 - **FR-007**: The command MUST support a global mode that records the origin as the per-user default instead of writing the repo config.
 - **FR-008**: The command MUST be idempotent: re-running with the same origin leaves an equivalent config and reports success without error.
 - **FR-009**: The command MUST update the recorded origin when invoked with a different value, replacing the prior value cleanly.
@@ -124,6 +134,8 @@ The following are explicitly **not** part of this feature and MUST NOT be pulled
 - Any network or git fetching, cloning, or authentication. This feature is offline config bootstrap only.
 - Bootstrapping or scaffolding an origin repository (that is the GitHub template's job).
 - Integrity (content-mismatch) and prerequisite (backing-CLI) failure classes and their exit statuses.
+- Collecting any onboarding metadata beyond the origin (e.g. repo tags used for skill suggestions) — deferred to a later version.
+- A dedicated config-management command (e.g. a `config get/set` verb). The project config file is hand-editable input; the init/bind operation writes and updates the origin, and re-running with a new origin updates it. Detailed config-file structure and management guidance live on the project docs website and are referenced there, not duplicated in this spec.
 
 ## Success Criteria *(mandatory)*
 
@@ -140,7 +152,7 @@ The following are explicitly **not** part of this feature and MUST NOT be pulled
 
 This feature is the first to exercise the project constitution; the following must hold and be carried into planning:
 
-- **II — Quickstart-as-Contract**: `quickstart.md` scenarios will be authored as executable steps (concrete `skillrig init …` invocations, observable config contents, exit statuses) mapping 1:1 to integration tests. Output-shape assertions are required: machine-readable output must be parseable and structurally complete; error output must be checked for its three parts (what failed / why / fix) as distinct assertions plus the correct exit status — not a single substring match.
+- **II — Quickstart-as-Contract**: `quickstart.md` scenarios will be authored as executable steps (concrete CLI invocations, observable config contents, exit statuses) mapping 1:1 to integration tests. Output-shape assertions are required: machine-readable output must be parseable and structurally complete; error output must be checked for its three parts (what failed / why / fix) as distinct assertions plus the correct exit status — not a single substring match.
 - **III — Ground-Truth Anchoring**: the recorded config format and the precedence resolution table must be anchored to a real captured sample (an actual written config file and a recorded resolution matrix), not invented from the spec.
 - **IX — Skill–CLI Co-Evolution**: this CLI capability ships with a corresponding agent skill update whose description reflects how users actually phrase "point this repo at our skills library / set the origin," including the no-origin failure mode.
 
@@ -149,7 +161,7 @@ This feature is the first to exercise the project constitution; the following mu
 **Assumptions**:
 
 - The origin identifier shape is `OWNER/REPO` (two non-empty, slash-separated segments); deeper validation (does the repo exist / is it reachable) is deliberately deferred because this feature is offline.
-- Config is stored as a small, hand-editable file at a project-scoped location and a per-user global location, consistent with the architecture's `config.toml` decision; the input config and any tool-written output (lockfiles) are separate concerns (lockfiles are out of scope here).
+- Config is stored as a small, hand-editable file at a project-scoped location and a per-user global location, consistent with the architecture's `config.toml` decision; the input config and any tool-written output (lockfiles) are separate concerns (lockfiles are out of scope here). The canonical, detailed config-file structure is maintained on the project docs website and referenced rather than restated here.
 - A developer running global mode wants only the per-user default written, never the repo config.
 
 **Dependencies**:
