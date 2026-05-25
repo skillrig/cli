@@ -6,7 +6,7 @@
 ## Synopsis
 
 ```
-skillrig init [--origin OWNER/REPO] [--global] [--json] [--verbose]
+skillrig init [--origin OWNER/REPO] [--global] [--non-interactive] [--json] [--verbose]
 ```
 
 ## Flags
@@ -14,11 +14,14 @@ skillrig init [--origin OWNER/REPO] [--global] [--json] [--verbose]
 | Flag | Type | Default | Meaning |
 |------|------|---------|---------|
 | `--origin` | string | "" | Origin to bind, `OWNER/REPO`. If omitted: prompt in an interactive TTY; error in non-interactive. |
-| `--global` | bool | false | Write the per-user global default (`$XDG_CONFIG_HOME/skillrig/config.toml` or `~/.config/skillrig/config.toml`) instead of `./.skillrig/config.toml`. |
+| `--global` | bool | false | Write the per-user global default (`$XDG_CONFIG_HOME/skillrig/config.toml` or `~/.config/skillrig/config.toml`) instead of the repo project config. |
+| `--non-interactive` | bool | false | Force non-interactive mode: never prompt. If required flags such `--origin` are omitted, fail (exit 1) instead of prompting, **even on an interactive TTY** (FR-006c). For scripts/agents that must not block on input. |
 | `--json` | bool | false | Emit the complete result object on stdout instead of compact human text. |
 | `--verbose` | bool | false | Print the underlying file path(s) / raw cause behind any summary or error. |
 
 `Args`: none (`cobra.NoArgs`); origin is a flag.
+
+> **Project write target (FR-005/FR-010):** without `--global`, the project config is written at the **git repository root** — located via `git rev-parse --show-toplevel`, a fully **offline** call — as `<repo-root>/.skillrig/config.toml`, so a repo has a single canonical config regardless of the cwd subdirectory. When the cwd is **not** inside a git repository, it falls back to `./.skillrig/config.toml` in the cwd. `git` is a required dependency of the framework (see plan.md → Technical Context). The resolver (`contracts/resolve.md`) finds this file from any subdirectory via walk-up, keeping write and read symmetric.
 
 ## Help (Progressive Discovery — cli.md Principle 1, Rule 1)
 
@@ -35,8 +38,8 @@ Examples:
 
 ## Behavior
 
-1. Resolve write target: `--global` → global config path; else `./.skillrig/config.toml` (create `.skillrig/` if missing — FR-010).
-2. Determine origin: `--origin` value, else if interactive TTY prompt once on stderr, else usage error (FR-006a).
+1. Resolve write target: `--global` → global config path; else the **git repo root** via `git rev-parse --show-toplevel` (offline) → `<repo-root>/.skillrig/config.toml`; if not inside a git repo, fall back to `./.skillrig/config.toml` in cwd (create `.skillrig/` if missing — FR-010).
+2. Determine origin: `--origin` value; else if `--non-interactive` is set → usage error without prompting (FR-006c); else if interactive TTY → prompt once on stderr; else (no TTY) usage error (FR-006a).
 3. `ParseOrigin` → on invalid shape, usage error, no write (FR-012).
 4. Load existing config at target (if any). Compare:
    - none present → write, `written=true`.
@@ -66,7 +69,8 @@ Keys always present: `ok, origin, scope, configPath, written`. `scope ∈ {proje
 
 | Condition | Exit | Message shape |
 |-----------|------|---------------|
-| `--origin` omitted, non-interactive | 1 | what: no origin given; why: non-interactive session; fix: pass `--origin OWNER/REPO` or set `SKILLRIG_ORIGIN`. |
+| `--origin` omitted, non-interactive **session** (no TTY) | 1 | what: no origin given; why: non-interactive session (no TTY); fix: pass `--origin OWNER/REPO` or set `SKILLRIG_ORIGIN`. |
+| `--origin` omitted, `--non-interactive` **forced** (even on a TTY) | 1 | what: no origin given; why: non-interactive mode requested (`--non-interactive`); fix: pass `--origin OWNER/REPO` or set `SKILLRIG_ORIGIN`. |
 | Malformed origin | 1 | what: invalid origin `<value>`; why: expected `OWNER/REPO`; fix: e.g. `skillrig init --origin my-org/my-skills`. |
 | Config dir/file not writable | 1 | what: cannot write `<path>`; why: `<raw os error>`; fix: check permissions / path. |
 

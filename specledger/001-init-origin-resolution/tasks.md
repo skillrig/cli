@@ -48,7 +48,8 @@ sl issue list --tree                                          # dependency graph
 |------|----|
 | Quickstart integration test harness | `SL-4958e2` |
 | Write failing TestQuickstart_* (US1) + output-shape asserts | `SL-db8e96` |
-| Implement `skillrig init` | `SL-2e4214` |
+| Git-repo fixtures + git-root write-target tests (BindFromGitSubdir / BindNonGitCwdFallback) | `SL-3b4985` |
+| Implement `skillrig init` (git-root write target; `--non-interactive` force flag) | `SL-2e4214` |
 
 ### Phase 4 — US2: Precedence resolution (P2) `SL-ba7eaa`
 | Task | ID |
@@ -58,7 +59,7 @@ sl issue list --tree                                          # dependency graph
 ### Phase 5 — US3: Actionable failures (P3) `SL-d990f5`
 | Task | ID |
 |------|----|
-| Write failing error-path tests (3-part asserts) | `SL-03ebb3` |
+| Write failing error-path tests (3-part asserts; incl. NonInteractiveFlag / FR-006c) | `SL-03ebb3` |
 | Implement errors-as-navigation | `SL-05dbc5` |
 
 ### Phase 6 — Polish `SL-60678c` (blocked by all stories)
@@ -76,7 +77,7 @@ Setup(SL-a9fb37) ─▶ Foundational(SL-b881e9) ─┬▶ US1(SL-ec18e7) ─┐
                                              └▶ US3(SL-d990f5) ─┘
 Foundational internals:  ParseOrigin(e2130a) + Config(2ac8c8) ─▶ ResolveOrigin(e69c8b)
                          Fixtures(60a982) + ResolveOrigin ─▶ US2 precedence tests(ca8e55)
-US1 (TDD):  harness(4958e2) ─▶ failing tests(db8e96) ─▶ init impl(2e4214)  [also needs e2130a, 2ac8c8]
+US1 (TDD):  harness(4958e2) ─▶ failing tests(db8e96) + git fixtures(3b4985) ─▶ init impl(2e4214)  [also needs e2130a, 2ac8c8]
 US3 (TDD):  harness(4958e2) ─▶ failing error tests(03ebb3) ─▶ errors impl(05dbc5)  [also needs init 2e4214]
 ```
 
@@ -90,7 +91,8 @@ US3 (TDD):  harness(4958e2) ─▶ failing error tests(03ebb3) ─▶ errors imp
 
 | Issue | DoD highlights |
 |-------|----------------|
-| SL-2e4214 (init) | quickstart scenarios match US1; BindProject/JSON/Idempotent/Rebind/Global/Help/Prompt tests pass; origin-only; git-root write + cwd fallback |
+| SL-2e4214 (init) | quickstart scenarios match US1; BindProject/JSON/Idempotent/Rebind/Global/Help/Prompt/BindFromGitSubdir/BindNonGitCwdFallback/NonInteractiveFlag tests pass; origin-only; git-root write (offline `rev-parse`) + cwd fallback; `--non-interactive` fail-fast (FR-006c) |
+| SL-3b4985 (git fixtures) | real git repos in tempdirs; git-root write target proven; cwd fallback proven; `git` required-dep documented |
 | SL-e69c8b (resolver) | single ResolveOrigin (AP-06); pure/deterministic; env>project>global |
 | SL-ca8e55 (US2 tests) | TestResolveOrigin rows 1–7 + FromSubdir pass; real fixtures, no mocks |
 | SL-05dbc5 (US3 errors) | MalformedOrigin + NoOriginNonInteractive pass; what/why/fix to stderr; exit 1 |

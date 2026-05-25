@@ -11,12 +11,13 @@ Deliver the first slice of the generic `skillrig` CLI: a `skillrig init` command
 
 **Language/Version**: Go 1.24+ (toolchain in this environment is 1.24.4; 1.25 also fine) — single static binary; cross-OS/arch via goreleaser later, out of scope here
 **Primary Dependencies**: `github.com/spf13/cobra` (command tree); `github.com/pelletier/go-toml/v2` (config read/write — see research.md). Dependencies kept minimal (consume-only, static binary).
-**Storage**: Local files only — project `.skillrig/config.toml`, global `~/.config/skillrig/config.toml` (XDG-aware). No database, no network.
+**Runtime dependency (required)**: **`git`** must be on `PATH`. `init` locates the project config write target at the repo root via `git rev-parse --show-toplevel` — a fully **offline** call (reads the local `.git`, no network/fetch/clone). Outside a git repo, it falls back to `cwd/.skillrig/config.toml`. This is the framework's one external-tool dependency for this feature; later features (`bump --pr`) add more git/`gh` use.
+**Storage**: Local files only — project `.skillrig/config.toml` (written at the git repo root), global `~/.config/skillrig/config.toml` (XDG-aware). No database, no network.
 **Testing**: Go standard `go test`. Two tiers — (a) in-process Cobra unit tests via `SetArgs`/`SetOut`/`SetErr` + table-driven resolver tests; (b) `TestQuickstart_*` integration tests that build and exec the real binary (Constitution II/III).
 **Target Platform**: macOS/Linux/Windows terminals, CI, and agent runners. Symlink/Windows concerns are not in this feature's scope.
 **Project Type**: single project (CLI binary).
 **Performance Goals**: Sub-100ms for `init` and resolution (fully offline; cli.md records no per-command duration metadata, so this is a soft target, not an SC).
-**Constraints**: Offline-only; no auth/credentials; consume-only (no bootstrap of an origin); idempotent; deterministic. Exit codes for this feature: `0` success, `1` usage/config error. Codes `2` (verification) and `3` (prerequisite) are reserved for later commands.
+**Constraints**: Offline-only (incl. `git rev-parse` — local, no fetch/clone); no auth/credentials; consume-only (no bootstrap of an origin); idempotent; deterministic; `git` required on `PATH` (write-target resolution). Exit codes for this feature: `0` success, `1` usage/config error. Codes `2` (verification) and `3` (prerequisite) are reserved for later commands.
 **Scale/Scope**: Small — one command (`init`), one resolver primitive, the root command skeleton, and config read/write. ~Hundreds of LOC.
 
 ## Constitution Check

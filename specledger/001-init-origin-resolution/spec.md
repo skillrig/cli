@@ -21,6 +21,8 @@ This is the first slice of the CLI, so it also establishes the baseline command 
 - Q: Should the spec name concrete commands (e.g. per architecture.md / cli.md) or stay command-agnostic? → A: Stay command-agnostic. The concrete command surface — names, flags, subcommands — is decided during `/specledger.plan` (research + quickstart.md), grounded in architecture.md and the CLI design docs.
 - Q: What is the scope of origin binding — origin only, or a broader onboarding that also collects repo tags for skill suggestions? → A: Origin only. When the origin is not supplied as an argument in an interactive session, the operation prompts for it; when supplied, it runs non-interactively. No additional onboarding metadata (e.g. repo tags / skill-suggestion data) is collected in this feature — that is deferred to a later version.
 - Q: Is a dedicated config-management command in scope for managing the project config file? → A: No. The config file is hand-editable input; the bind operation writes and updates the origin (re-running with a new origin updates it). The detailed config structure and management guidance live on the project docs website (referenced, not duplicated in this spec).
+- Q: This spec describes "the bind command" abstractly — what is the concrete command? → A: The bind action is implemented by `skillrig init` (decided at planning — see [contracts/init.md](./contracts/init.md)). Throughout this spec, "the bind command" / "binding" refers to `skillrig init`, whose human output prints `bound origin …`. There is **no** separate `config` command: the config file is hand-editable input (see the clarification above), and `init` is the one verb that writes/updates the origin.
+- Q: Should non-interactive behaviour be auto-detected (TTY) only, or also explicitly forced? → A: Both. Absence of a TTY auto-selects non-interactive (FR-006a). In addition, the caller can **force** non-interactive mode explicitly; when forced, a missing required value MUST fail fast (exit 1) rather than fall back to a prompt — even on a TTY. This guarantees scripts/agents never block on input (FR-006c, US3).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -70,8 +72,9 @@ A developer or agent runs a command that needs an origin in a repo that was neve
 **Acceptance Scenarios**:
 
 1. **Given** no origin configured in any source, **When** a command requiring an origin runs, **Then** it exits with a usage/config error status and prints — to the error stream — (a) what failed, (b) that no origin is configured in any source, and (c) at least two concrete fixes (bind the repo, or set the environment override).
-2. **Given** the bind command is invoked with no origin argument and the session is non-interactive, **When** it runs, **Then** it exits with a usage/config error status and explains how to supply the origin.
+2. **Given** the bind command is invoked with no origin argument and the session is non-interactive (no TTY), **When** it runs, **Then** it exits with a usage/config error status and explains how to supply the origin.
 3. **Given** an origin value that is not in the expected `OWNER/REPO` shape, **When** it is supplied, **Then** the tool rejects it with an error naming the expected format and showing the offending value, without writing config.
+4. **Given** an interactive TTY but the caller has explicitly forced non-interactive mode (the no-prompt flag), **When** the bind command runs with no origin supplied, **Then** it does **not** prompt and exits with a usage/config error status, stating that non-interactive mode was requested and how to supply the origin (`--origin OWNER/REPO` or `SKILLRIG_ORIGIN`).
 
 ---
 
@@ -102,6 +105,7 @@ A developer or agent runs a command that needs an origin in a repo that was neve
 - **FR-006**: The command MUST accept the origin as an explicit argument so it can run non-interactively (suitable for agents and scripts).
 - **FR-006a**: When the origin is not supplied as an argument in an interactive session, the command MUST prompt for it; when it is supplied, the command MUST NOT prompt (fully non-interactive). In a non-interactive session with no origin supplied, the command MUST fail with a usage/config error (see FR-017, US3).
 - **FR-006b**: The command MUST collect only the origin. It MUST NOT collect or persist any additional onboarding metadata (e.g. repo tags for skill suggestions) — that is deferred to a later version (see Out of Scope).
+- **FR-006c**: The command MUST support an explicit **force-non-interactive** mode (a flag). When that mode is set and no origin is supplied, the command MUST fail with a usage/config error (exit 1) **without prompting** — even when stdin is an interactive TTY. This makes the no-prompt guarantee explicit for scripts and agents, independent of TTY auto-detection (FR-006a). The flag and TTY auto-detection are complementary: either condition selects non-interactive behaviour.
 - **FR-007**: The command MUST support a global mode that records the origin as the per-user default instead of writing the repo config.
 - **FR-008**: The command MUST be idempotent: re-running with the same origin leaves an equivalent config and reports success without error.
 - **FR-009**: The command MUST update the recorded origin when invoked with a different value, replacing the prior value cleanly.

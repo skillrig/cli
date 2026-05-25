@@ -72,6 +72,8 @@ Rows map directly to table-driven resolver unit tests and to quickstart preceden
 
 No deletion, no other transitions in scope.
 
+**Write target** (where the project config lands): with `--global` → the global config path; otherwise the **git repository root** located via `git rev-parse --show-toplevel` (offline) → `<repo-root>/.skillrig/config.toml`, so a repo has one canonical config regardless of the cwd subdirectory. When the cwd is **not** inside a git repo, it falls back to `cwd/.skillrig/config.toml`. `git` is a required dependency (see plan.md → Technical Context). This keeps write and read symmetric: the resolver walks up from `cwd` and finds the same root file (see `contracts/resolve.md`).
+
 ## Validation rules (consolidated)
 
 | Rule | Where | Failure → |
@@ -80,4 +82,6 @@ No deletion, no other transitions in scope.
 | Blank `SKILLRIG_ORIGIN` = unset | resolver | fall through precedence |
 | Unparseable/origin-less config = "none from this source" | resolver | skip source, continue; clear diagnostic, not raw dump (FR-004) |
 | No origin in any source | resolver → caller | actionable "no origin configured" error, exit 1 (US3, FR-003) |
-| Non-interactive + no `--origin` | `init` | usage error, exit 1 (FR-006a) |
+| No TTY + no `--origin` (auto non-interactive) | `init` | usage error, exit 1 (FR-006a) |
+| `--non-interactive` forced + no `--origin` (even on a TTY) | `init` | usage error, exit 1, no prompt (FR-006c) |
+| Project write target = git root (offline `rev-parse`), else cwd | `init` | path resolution; `git` required on PATH |

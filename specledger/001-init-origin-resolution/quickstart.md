@@ -7,6 +7,7 @@
 - `TestMain` builds the binary once (`go build -o $TMP/skillrig .`) and runs all CLI scenarios against it via `os/exec`.
 - Each scenario runs in its own `t.TempDir()` as `cwd`, with `HOME`/`XDG_CONFIG_HOME` pointed at the temp dir so project and global config are isolated and parallel-safe.
 - `SKILLRIG_ORIGIN` is set per-scenario via the exec `Env` (never the process env).
+- **Git fixtures**: git-root scenarios initialise a throwaway repo in the tempdir (`git init -q`) and create nested subdirs, then run `skillrig init` from a subdir to assert the config lands at the repo root. A non-git tempdir asserts the cwd fallback. `git` is a required dependency of both the harness and skillrig itself (`git rev-parse --show-toplevel`, offline only — no fetch/clone). A helper skips git scenarios with a clear message if `git` is absent from PATH.
 
 Conventions: **stdout** = data, **stderr** = errors/prompts, **exit** = code.
 
@@ -61,6 +62,25 @@ $ skillrig init --origin my-org/my-skills --global
 - **assert**: `./.skillrig/config.toml` does **not** exist (repo config untouched).
 - **`--json`**: `scope=="global"`.
 
+### TestQuickstart_BindFromGitSubdir  (US1 / FR-005, FR-010 — git-root write target)
+> Initialise a git repo in the tempdir and run `init` from a nested subdir. (Skipped with a clear message if `git` is not on PATH.)
+```
+$ git init -q && mkdir -p a/b/c
+$ cd a/b/c && skillrig init --origin my-org/my-skills
+```
+- **exit**: 0
+- **file**: `<repo-root>/.skillrig/config.toml` equals the origin fixture — written at the **git root**, NOT at `a/b/c/.skillrig/config.toml`.
+- **assert**: no `.skillrig/` dir is created under `a/b/c`.
+- **resolve-symmetry**: `ResolveOrigin(cwd=a/b/c, env)` finds it via walk-up → `Source==project`, `ConfigPath==<repo-root>/.skillrig/config.toml`.
+
+### TestQuickstart_BindNonGitCwdFallback  (US1 / FR-010 — cwd fallback)
+> Non-git tempdir: write target falls back to cwd.
+```
+$ skillrig init --origin my-org/my-skills    # tempdir is NOT a git repo
+```
+- **exit**: 0
+- **file**: `./.skillrig/config.toml` (in cwd) equals the origin fixture.
+
 ### TestQuickstart_MalformedOrigin  (US3 / FR-012 — error-shape)
 ```
 $ skillrig init --origin not-a-valid-origin
@@ -75,8 +95,17 @@ $ skillrig init --origin not-a-valid-origin
 $ skillrig init           # stdin is NOT a TTY (piped /dev/null)
 ```
 - **exit**: 1
-- **stderr** three parts: (a) no origin given; (b) non-interactive session; (c) fix = pass `--origin OWNER/REPO` or set `SKILLRIG_ORIGIN`.
+- **stderr** three parts: (a) no origin given; (b) non-interactive session (no TTY); (c) fix = pass `--origin OWNER/REPO` or set `SKILLRIG_ORIGIN`.
 - **assert**: no config written.
+
+### TestQuickstart_NonInteractiveFlag  (US3 / FR-006c — forced no-prompt, error-shape)
+> stdin **is** an interactive TTY (pty), but `--non-interactive` forces fail-fast. Asserts the flag overrides TTY auto-detection — the distinct intent behind FR-006c.
+```
+$ skillrig init --non-interactive       # interactive TTY present, no --origin
+```
+- **exit**: 1
+- **stderr** three parts: (a) no origin given; (b) non-interactive mode requested (`--non-interactive`); (c) fix = pass `--origin OWNER/REPO` or set `SKILLRIG_ORIGIN`.
+- **assert**: the prompt string `Origin (OWNER/REPO):` is **NOT** emitted (no blocking read); no config written.
 
 ### TestQuickstart_PromptInteractive  (US1 / FR-006a — interactive path)
 > Interactive TTY simulated by feeding stdin and signaling interactive mode in the harness (e.g. a pty or the harness's interactive shim).
@@ -134,8 +163,11 @@ project config at `<tmp>/.skillrig/config.toml`; call `ResolveOrigin` with `cwd=
 | IdempotentRebind | FR-008, SC-005 |
 | RebindDifferent | FR-009 |
 | Global | FR-007 |
+| BindFromGitSubdir | US1, FR-005, FR-010, SC-002 (git-root write target) |
+| BindNonGitCwdFallback | US1, FR-010 (cwd fallback when not in a git repo) |
 | MalformedOrigin | FR-012, FR-014, SC-004 |
 | NoOriginNonInteractive | FR-006a, FR-014, SC-004 |
+| NonInteractiveFlag | US3, FR-006c, FR-014, SC-004 |
 | PromptInteractive | FR-006a |
 | Help | FR-013, SC-006 |
 | ResolveOrigin_Row1–7 | FR-001, FR-002, FR-003, FR-004, SC-003 |
