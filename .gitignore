@@ -1,1 +1,15 @@
+# SpecLedger issue store lock
 issues.jsonl.lock
+
+# Pycache (skills eval)
+__pycache__/
+
+# Go build artifacts
+/skillrig
+*.exe
+*.test
+*.out
+
+# OS / editor cruft
+.DS_Store
+*.swp

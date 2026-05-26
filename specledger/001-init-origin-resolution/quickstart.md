@@ -21,10 +21,11 @@ $ skillrig init --origin my-org/my-skills
 ```
 - **exit**: 0
 - **stdout** (human, compact): line 1 contains `bound origin my-org/my-skills` and `project`; line 2 is the `→ resolve order:` footer hint.
-- **file** `./.skillrig/config.toml` equals fixture:
+- **file** `./.skillrig/config.toml` equals fixture (`test/fixtures/config.toml`):
   ```toml
-  origin = "my-org/my-skills"
+  origin = 'my-org/my-skills'
   ```
+  (TOML literal-string form — the real `go-toml/v2` output; see data-model.md ground-truth note G1.)
 - **shape assert**: `len(stdoutLines) <= 2`.
 
 ### TestQuickstart_BindProjectJSON  (US1 / FR-016 — output-shape)

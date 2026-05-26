@@ -41,10 +41,17 @@ Same shape as ProjectConfig; the per-user default origin. Written only with `--g
 
 ```toml
 # .skillrig/config.toml — written by `skillrig init`
-origin = "my-org/my-skills"
+origin = 'my-org/my-skills'
 ```
 
 That is the entire v0 file: one `origin` key. The byte-for-byte output of `init` is asserted against this fixture (round-trip: write → read → equal).
+
+> **Ground-truth note (review G1):** the canonical bytes use TOML *literal-string*
+> (single-quote) form — `origin = 'my-org/my-skills'` — because that is the real
+> output emitted by `github.com/pelletier/go-toml/v2` (research D1) for a value
+> needing no escaping. Single- and double-quoted TOML are semantically identical;
+> the committed fixture (`test/fixtures/config.toml`) and `TestSaveMatchesFixture`
+> anchor the real output, regenerated from `Save` rather than hand-written.
 
 ## Resolution precedence matrix (recorded ground truth)
 
