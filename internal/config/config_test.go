@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -173,7 +174,11 @@ func TestFindProjectConfigWalkUp(t *testing.T) {
 		t.Fatalf("mkdir sub: %v", err)
 	}
 
-	got, found := FindProjectConfig(sub)
+	got, found, err := FindProjectConfig(sub)
+	if err != nil {
+		t.Fatalf("FindProjectConfig: %v", err)
+	}
+
 	if !found {
 		t.Fatal("FindProjectConfig from subdir: not found, want found via walk-up")
 	}
@@ -186,7 +191,74 @@ func TestFindProjectConfigWalkUp(t *testing.T) {
 func TestFindProjectConfigNoneReturnsFalse(t *testing.T) {
 	t.Parallel()
 
-	if _, found := FindProjectConfig(t.TempDir()); found {
+	_, found, err := FindProjectConfig(t.TempDir())
+	if err != nil {
+		t.Fatalf("FindProjectConfig: %v", err)
+	}
+
+	if found {
 		t.Error("FindProjectConfig in empty dir should report not found")
+	}
+}
+
+// TestFindProjectConfigUnstattableIsError pins Qodo #2: a stat failure that is
+// NOT fs.ErrNotExist (here, permission denied because an ancestor .skillrig dir
+// lacks the execute/search bit) is surfaced as an error, not silently treated
+// as "not found". Skipped as root (perms don't restrict).
+func TestFindProjectConfigUnstattableIsError(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; file permissions do not restrict access")
+	}
+
+	root := t.TempDir()
+	skillDir := filepath.Join(root, configDirName)
+
+	if err := os.MkdirAll(skillDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Remove search permission so stat of <skillDir>/config.toml fails EACCES.
+	if err := os.Chmod(skillDir, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(skillDir, 0o750) })
+
+	if _, _, err := FindProjectConfig(root); err == nil {
+		t.Fatal("FindProjectConfig should surface a permission-denied stat as an error, got nil")
+	}
+}
+
+// TestProjectWriteTargetCancelledCtxIsFatal pins Qodo #4: an unexpected git
+// failure (here a cancelled context) is propagated, NOT masked as a cwd
+// fallback — so init never writes config to the wrong directory.
+func TestProjectWriteTargetCancelledCtxIsFatal(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before the call so git rev-parse fails on the dead context
+
+	if _, err := ProjectWriteTarget(ctx, t.TempDir()); err == nil {
+		t.Fatal("cancelled context must yield a fatal error, not a cwd fallback")
+	}
+}
+
+// TestProjectWriteTargetNonRepoFallsBackToCwd verifies the expected fallback is
+// preserved: outside a git repo (clean non-zero git exit), the write target is
+// <cwd>/.skillrig/config.toml with no error.
+func TestProjectWriteTargetNonRepoFallsBackToCwd(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+
+	got, err := ProjectWriteTarget(context.Background(), cwd)
+	if err != nil {
+		t.Fatalf("non-repo cwd should fall back without error, got: %v", err)
+	}
+
+	want := filepath.Join(cwd, configDirName, configFileName)
+	if got != want {
+		t.Errorf("ProjectWriteTarget = %q, want cwd fallback %q", got, want)
 	}
 }

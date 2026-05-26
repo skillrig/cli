@@ -1,0 +1,15 @@
+[
+  { "query": "The origin-resolver changes on this branch are done and tested — let's open a PR against main.", "should_trigger": true },
+  { "query": "commit what I've got staged and push it up as a pull request", "should_trigger": true },
+  { "query": "feature's finished, can you create a PR for these changes and tell me what the qodo review comes back with?", "should_trigger": true },
+  { "query": "let's PR this", "should_trigger": true },
+  { "query": "ok ship it — branch, push, and raise the pull request", "should_trigger": true },
+  { "query": "open a pull request with a proper summary and test plan, then wait for the bot review", "should_trigger": true },
+  { "query": "push my work to a new branch and submit a PR", "should_trigger": true },
+  { "query": "what did qodo flag on PR #128? has the review landed yet?", "should_trigger": true },
+  { "query": "open PR #128 in my browser so I can read through the discussion", "should_trigger": false },
+  { "query": "review this diff with me in crit before I commit anything", "should_trigger": false },
+  { "query": "rebase my feature branch onto main and help me resolve the conflicts", "should_trigger": false },
+  { "query": "what's the status of the CI checks on my current branch?", "should_trigger": false },
+  { "query": "just stage and commit these changes locally — don't push or open anything yet", "should_trigger": false }
+]

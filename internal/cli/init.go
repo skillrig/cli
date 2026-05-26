@@ -128,7 +128,15 @@ func (ic *initCmd) writeTarget(cmd *cobra.Command) (path, scope string, err erro
 		return "", "", &UsageError{Msg: "cannot determine working directory\nwhy: " + err.Error(), Cause: err}
 	}
 
-	return config.ProjectWriteTarget(cmd.Context(), cwd), "project", nil
+	path, err = config.ProjectWriteTarget(cmd.Context(), cwd)
+	if err != nil {
+		return "", "", &UsageError{
+			Msg:   "cannot locate the project config write target\nwhy: " + err.Error() + "\nfix: ensure git works in this directory, or pass --global",
+			Cause: err,
+		}
+	}
+
+	return path, "project", nil
 }
 
 // resolveOriginInput returns the raw origin string from --origin, an

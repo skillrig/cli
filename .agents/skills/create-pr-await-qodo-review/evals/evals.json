@@ -1,0 +1,39 @@
+[
+  {
+    "id": 1,
+    "name": "full-pr-flow-always-waits",
+    "description": "User asks to open a PR for finished work — the skill should run the commit/branch/push/create flow and then ALWAYS wait for the Qodo review without asking permission, driving the wait with the Monitor tool.",
+    "prompt": "The origin-resolver changes on this branch are done and tested — let's open a PR against main.",
+    "trap": "Model asks the user whether to wait for the Qodo review (it should always wait), runs the poller in the foreground (blocking), or forgets the review wait entirely after creating the PR.",
+    "assertions": [
+      { "id": "1.1", "text": "Follows the commit -> branch (if on main) -> push -> `gh pr create` sequence with a conventional-commit title" },
+      { "id": "1.2", "text": "Waits for the Qodo review unconditionally — does NOT ask the user whether to wait" },
+      { "id": "1.3", "text": "Drives the wait with the Monitor tool running `scripts/review_poll.py` (persistent), not a blocking foreground command" },
+      { "id": "1.4", "text": "States it will surface the Qodo findings once the review lands and that the user can keep working meanwhile" }
+    ]
+  },
+  {
+    "id": 2,
+    "name": "ship-it-from-main",
+    "description": "Casual 'ship it' on dirty working tree while on main — must create a branch first (never commit to main), use conventional commit + structured PR body, then wait for Qodo via Monitor.",
+    "prompt": "ok ship it — branch, push, and raise the pull request",
+    "trap": "Model commits directly to main, uses a non-conventional commit/PR title, or skips the Qodo review wait.",
+    "assertions": [
+      { "id": "2.1", "text": "Creates a feature branch before committing because the change would otherwise land on main" },
+      { "id": "2.2", "text": "Uses conventional-commit format for both the commit message and the PR title" },
+      { "id": "2.3", "text": "Arms the Monitor tool on `review_poll.py` to wait for the Qodo review after the PR is created" }
+    ]
+  },
+  {
+    "id": 3,
+    "name": "check-review-on-existing-pr",
+    "description": "User asks specifically about the Qodo review on an already-open PR — the skill should poll that PR for the review rather than creating a new one.",
+    "prompt": "what did qodo flag on PR #128? has the review landed yet?",
+    "trap": "Model tries to create a new PR, or hits the GitHub API once and reports 'not ready' instead of watching until the review lands.",
+    "assertions": [
+      { "id": "3.1", "text": "Recognizes the PR already exists and does NOT run the commit/branch/create flow" },
+      { "id": "3.2", "text": "Uses the Monitor tool with `review_poll.py` against PR #128 to wait for and report the Qodo findings" },
+      { "id": "3.3", "text": "Summarizes the Qodo findings (or reports the timeout) rather than dumping the raw comment" }
+    ]
+  }
+]

@@ -74,7 +74,12 @@ func ResolveOrigin(cwd string, env Env) (ResolutionResult, error) {
 		return ResolutionResult{Origin: origin, Source: SourceEnv}, nil
 	}
 
-	if path, found := FindProjectConfig(cwd); found {
+	path, found, err := FindProjectConfig(cwd)
+	if err != nil {
+		return ResolutionResult{}, err
+	}
+
+	if found {
 		origin, ok, diag, err := originFromFile(path, SourceProject)
 		if err != nil {
 			return ResolutionResult{}, err

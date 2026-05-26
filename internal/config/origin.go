@@ -21,8 +21,14 @@ type Origin struct {
 	Repo  string
 }
 
-// String renders the origin as "Owner/Repo".
+// String renders the origin as "Owner/Repo". The zero Origin (the SourceNone
+// sentinel) renders as "" so a "no origin" result never stringifies to a
+// misleading "/" that looks configured.
 func (o Origin) String() string {
+	if o.Owner == "" && o.Repo == "" {
+		return ""
+	}
+
 	return o.Owner + "/" + o.Repo
 }
 

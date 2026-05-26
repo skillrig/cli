@@ -75,3 +75,14 @@ func TestOriginString(t *testing.T) {
 		t.Errorf("String() = %q, want %q", got, "my-org/my-skills")
 	}
 }
+
+// TestOriginStringZeroIsEmpty pins Qodo #3: the zero Origin (the SourceNone
+// sentinel returned by ResolveOrigin) must stringify to "" — never "/" — so it
+// cannot be mistaken for a configured value.
+func TestOriginStringZeroIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	if got := (Origin{}).String(); got != "" {
+		t.Errorf("zero Origin String() = %q, want empty string", got)
+	}
+}

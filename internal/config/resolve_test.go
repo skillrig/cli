@@ -99,8 +99,8 @@ func TestResolveOrigin_Precedence(t *testing.T) {
 				t.Fatalf("ResolveOrigin: %v", err)
 			}
 
-			if got.Origin.String() != originString(tc.wantOrigin) {
-				t.Errorf("Origin = %q, want %q", got.Origin.String(), originString(tc.wantOrigin))
+			if got.Origin.String() != tc.wantOrigin {
+				t.Errorf("Origin = %q, want %q", got.Origin.String(), tc.wantOrigin)
 			}
 
 			if got.Source != tc.wantSource {
@@ -320,14 +320,4 @@ func TestResolveOrigin_MalformedEnvIsFatal(t *testing.T) {
 	if !strings.Contains(err.Error(), "SKILLRIG_ORIGIN") {
 		t.Errorf("error %q should name SKILLRIG_ORIGIN", err)
 	}
-}
-
-// originString renders the expected origin: the empty want maps to the zero
-// Origin's String ("/"), which we normalize to "" for comparison.
-func originString(want string) string {
-	if want == "" {
-		return (Origin{}).String()
-	}
-
-	return want
 }

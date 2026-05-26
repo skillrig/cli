@@ -150,54 +150,86 @@ func GlobalConfigPath(env Env) (string, error) {
 // .skillrig/config.toml and returns its path. The boolean reports whether one
 // was found. This is a pure filesystem walk (no git subprocess) so resolution
 // works offline, pre-`git init`, and in sandboxes (research D3).
-func FindProjectConfig(cwd string) (string, bool) {
+//
+// A missing candidate (fs.ErrNotExist) is the normal walk-up case and is
+// skipped silently. Any other stat failure — e.g. permission denied on an
+// ancestor — is a genuine I/O error and is returned, so the resolver fails fast
+// rather than masking an unreadable project config as "not found".
+func FindProjectConfig(cwd string) (string, bool, error) {
 	dir := cwd
 
 	for {
 		candidate := filepath.Join(dir, configDirName, configFileName)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, true
+
+		info, err := os.Stat(candidate)
+		switch {
+		case err == nil && !info.IsDir():
+			return candidate, true, nil
+		case err != nil && !errors.Is(err, fs.ErrNotExist):
+			return "", false, fmt.Errorf("stat %s: %w", candidate, err)
 		}
 
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", false
+			return "", false, nil
 		}
 
 		dir = parent
 	}
 }
 
+// errEmptyGitRoot is returned when `git rev-parse` succeeds but yields no path.
+var errEmptyGitRoot = errors.New("git rev-parse returned an empty root")
+
 // ProjectWriteTarget returns where `skillrig init` should write the project
 // config: <git-repo-root>/.skillrig/config.toml when cwd is inside a git work
 // tree (located via an offline `git rev-parse --show-toplevel`), else
-// <cwd>/.skillrig/config.toml (research D3, FR-010). git is a required
-// dependency for the git-root case; absence falls back to cwd.
-func ProjectWriteTarget(ctx context.Context, cwd string) string {
-	root, ok := gitRoot(ctx, cwd)
-	if !ok {
-		root = cwd
+// <cwd>/.skillrig/config.toml (research D3, FR-010).
+//
+// The cwd fallback applies ONLY to expected conditions — git not installed
+// (exec.ErrNotFound) or cwd not being a repository (a clean non-zero git exit).
+// An unexpected failure — context cancellation/timeout, or any other error —
+// is returned, so init never silently writes config to the wrong directory.
+func ProjectWriteTarget(ctx context.Context, cwd string) (string, error) {
+	root, err := gitRoot(ctx, cwd)
+
+	switch {
+	case err == nil:
+		return filepath.Join(root, configDirName, configFileName), nil
+	case ctx.Err() != nil:
+		// Cancellation/timeout (may surface as a kill-signal ExitError) is fatal.
+		return "", fmt.Errorf("locate git repo root: %w", ctx.Err())
+	case errors.Is(err, exec.ErrNotFound):
+		// git is not installed — fall back to cwd.
+	default:
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			// Not a clean non-zero exit (e.g. empty root, exec failure) — surface it.
+			return "", fmt.Errorf("locate git repo root: %w", err)
+		}
+		// git ran and returned non-zero (cwd is not a repository) — fall back.
 	}
 
-	return filepath.Join(root, configDirName, configFileName)
+	return filepath.Join(cwd, configDirName, configFileName), nil
 }
 
 // gitRoot returns the work-tree root for cwd via `git rev-parse --show-toplevel`
-// (offline — reads local .git, no network). The boolean is false when cwd is
-// not in a repo or git is unavailable.
-func gitRoot(ctx context.Context, cwd string) (string, bool) {
+// (offline — reads local .git, no network). Every failure is returned as an
+// error; ProjectWriteTarget decides which errors are expected (fall back) vs
+// fatal (propagate).
+func gitRoot(ctx context.Context, cwd string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
 	cmd.Dir = cwd
 
 	out, err := cmd.Output()
 	if err != nil {
-		return "", false
+		return "", err
 	}
 
 	root := strings.TrimSpace(string(out))
 	if root == "" {
-		return "", false
+		return "", errEmptyGitRoot
 	}
 
-	return root, true
+	return root, nil
 }
