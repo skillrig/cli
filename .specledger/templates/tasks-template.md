@@ -222,6 +222,7 @@ Examples of foundational tasks (adjust based on your project):
 **Purpose**: Improvements that affect multiple user stories
 
 - [ ] TXXX [P] Documentation updates in docs/
+- [ ] TXXX Update CLAUDE.md to reflect current architectural setup: new/changed commands, shared library paths added or moved (e.g. a new `internal/<pkg>`, `skillcore`, the origin resolver). Rule of thumb — every shared library path belongs in CLAUDE.md. (Plan's CLAUDE.md Sync Gate)
 - [ ] TXXX Code cleanup and refactoring
 - [ ] TXXX Performance optimization across all stories
 - [ ] TXXX [P] Additional unit tests for non-obvious internal logic

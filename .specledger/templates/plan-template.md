@@ -39,6 +39,14 @@ Verify compliance with principles from `.specledger/memory/constitution.md`:
 - [ ] **IV. Code Quality (Go)**: `go test` is the test framework; `gofmt`/`go vet`/lint pass; execution logic independent of output format
 - [ ] **V. Simplicity (YAGNI)**: No premature abstraction; dependencies/indirection justified by a concrete requirement
 
+### CLAUDE.md Sync Gate
+
+*GATE: Re-check after Phase 1 design. CLAUDE.md is the onboarding contract for future agents — it must reflect the current repository layout, not only what is planned.*
+
+- [ ] **Landed features**: Commands/subcommands this feature adds or changes are reflected in CLAUDE.md (e.g. the "what is implemented" note, command surface, exit-code or flag contract). A command listed in CLAUDE.md must exist; one that ships must not be missing.
+- [ ] **Shared library paths**: Any shared/cross-cutting package this feature introduces or relocates (e.g. a new `internal/<pkg>`, the `skillcore` integrity primitive, the single origin resolver) is documented in CLAUDE.md with its responsibility and the single-implementation rule that guards it. **Rule of thumb: every shared library path should be highlighted in CLAUDE.md** — if planning adds one, planning updates CLAUDE.md.
+- [ ] **Tasks include the sync step**: `/specledger.tasks` will emit an explicit task to update CLAUDE.md (see tasks-template Polish phase), so the update is tracked work, not an afterthought.
+
 **Complexity Violations** (if any, justify in Complexity Tracking table below):
 - None identified / [List violations and justifications]
 

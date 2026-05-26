@@ -1,6 +1,8 @@
-# CLI Design Principles
+<!-- Source: extracted from skillrig-cli/docs/design/cli.md (the skillrig CLI design doc).
+     Examples reference skillrig commands (search/add/verify/bump/doctor/init) as concrete
+     illustrations; the principles generalize to any agent-facing Go (Cobra) CLI. -->
 
-<!-- TODO: remove duplication of progressively loaded agentic-go-cli-design skill? -->
+# CLI Design Principles
 
 Design guidelines for the generic `skillrig` CLI binary. The CLI is the entry point for humans, agents, and CI alike (R3) — the *same* static binary for every org (R4) — so it must be self-documenting, token-efficient, and navigable without external documentation. An agent that can only learn the tool from `--help` should still get one-shot success.
 

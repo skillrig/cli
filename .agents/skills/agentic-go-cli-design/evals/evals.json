@@ -1,0 +1,29 @@
+{
+  "skill_name": "agentic-go-cli-design",
+  "description": "Evaluates whether the skill drives agent-friendly Cobra CLI output: progressive --help, compact human output with footer hints, complete --json, navigational errors, load-bearing exit codes, and detailed-data-to-disk for grep/sed on large reports.",
+  "baseline": "without_skill",
+  "prompt_design_note": "Prompts are deliberately NAIVE — they read like a casual 'just add this command' request and leak NONE of the skill's quality requirements (no 'agents get stuck', no 'context window', no 'design the output', no enumerated failure modes). The whole point is to measure what the skill produces UNPROMPTED vs a baseline given the same bare request. iteration-1 used requirement-leaking prompts and was discarded for that reason.",
+  "evals": [
+    {
+      "id": 0,
+      "name": "new-command-design",
+      "prompt": "Add a `skillrig list` command to our `skillrig` CLI (it's Go + Cobra). It lists the skills this repo has vendored — each skill has a name, the origin it came from, its version, the upstream commit SHA, the git tree SHA, the on-disk path, and a description. Wire up the cobra command.",
+      "expected_output": "A Cobra command with a Long description and >=2 Examples; compact human output that truncates the long description and shows a count + footer hint pointing at the drill-down/--json path; a complete, untruncated --json mode; data to stdout and any errors to stderr.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "error-navigation",
+      "prompt": "Our `skillrig add <skill>` command shells out to `git` to fetch the skill subtree from the origin repo. On failure right now it just does `return fmt.Errorf(\"git failed: %s\", stderr)`. Clean up the error handling.",
+      "expected_output": "Error that preserves the raw git/exec error verbatim AND adds cause-based fix guidance; distinguishes 'origin unreachable / repo not found' from 'private repo present but auth/credential failure (gh auth / GITHUB_TOKEN)'; offers a --verbose escape hatch; uses distinct non-zero exit codes for usage vs prerequisite failure; writes to stderr.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "aggregate-output",
+      "prompt": "Add a `skillrig doctor` command to our `skillrig` CLI (Go + Cobra). It runs a health check across every vendored skill — for each skill it collects the backing-CLI prerequisites and whether each resolves, version-constraint satisfaction, auth reachability for private tools, and whether the on-disk tree matches the locked tree SHA. Wire it up so it prints the report.",
+      "expected_output": "Compact human summary (per-skill/aggregate counts, not the full nested data) ending in a footer hint; complete --json for programmatic consumption; detailed per-skill findings written to files on disk that the agent can grep/sed/jq through instead of dumping to stdout; meaningful exit code reflecting pass/fail of the health gate.",
+      "files": []
+    }
+  ]
+}
