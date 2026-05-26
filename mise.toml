@@ -2,4 +2,5 @@
 # Issue tracking is now built into sl CLI (sl issue commands)
 
 [tools]
+"github:kevindutra/crit" = "latest"
 # Add your project tools here

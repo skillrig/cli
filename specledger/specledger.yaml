@@ -1,9 +1,10 @@
 version: 1.0.0
 project:
+    id: fb36c2cc-f114-4b82-b7ea-f5e792256344
     name: skillrig-cli
     short_code: sk
     created: 2026-05-24T13:39:16.690278+08:00
-    modified: 2026-05-24T13:39:16.690286+08:00
+    modified: 2026-05-24T19:59:59.93992+08:00
     version: 0.1.0
 playbook:
     name: specledger

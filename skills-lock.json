@@ -1,6 +1,36 @@
 {
   "version": 1,
   "skills": {
+    "golang-cli": {
+      "source": "samber/cc-skills-golang",
+      "ref": "HEAD",
+      "sourceType": "github",
+      "computedHash": "46b26038d586a31fb81085be47e9959c03123e331227222c1f5310d66e2cb0b6"
+    },
+    "golang-code-style": {
+      "source": "samber/cc-skills-golang",
+      "ref": "HEAD",
+      "sourceType": "github",
+      "computedHash": "525439afec53774c634877111e79853abf623dd96cd2602b52eca212058e242c"
+    },
+    "golang-lint": {
+      "source": "samber/cc-skills-golang",
+      "ref": "HEAD",
+      "sourceType": "github",
+      "computedHash": "354e2875b38b2591ba6abe5bbb11d9c59c0fd6d0dcb035923677c84cf6c13ef9"
+    },
+    "golang-spf13-cobra": {
+      "source": "samber/cc-skills-golang",
+      "ref": "HEAD",
+      "sourceType": "github",
+      "computedHash": "4a8e12511278bb32a91ab9fc6e80c87158fc6b56431adfbaf0ab2a4c77c09d88"
+    },
+    "golang-testing": {
+      "source": "samber/cc-skills-golang",
+      "ref": "HEAD",
+      "sourceType": "github",
+      "computedHash": "ffd3dd94831f0edce89c5749c211bfec48bd9a2eb178b2f985dd18b00a9cfefe"
+    },
     "skill-creator": {
       "source": "anthropics/skills",
       "ref": "HEAD",
