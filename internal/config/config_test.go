@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,8 +84,16 @@ func TestLoadMalformedErrors(t *testing.T) {
 		t.Fatalf("write malformed: %v", err)
 	}
 
-	if _, err := Load(path); err == nil {
-		t.Error("Load malformed file should error")
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load malformed file should error")
+	}
+
+	// FR-004: a malformed file is a *MalformedError so the resolver can skip it
+	// (vs. a plain I/O error, which is fatal).
+	var malformed *MalformedError
+	if !errors.As(err, &malformed) {
+		t.Errorf("Load error %T is not a *MalformedError", err)
 	}
 }
 

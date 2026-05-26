@@ -11,7 +11,7 @@ func ResolveOrigin(cwd string, env Env) (ResolutionResult, error)
 ```
 
 - `env` is an injected accessor (e.g. `func(key string) string`) so tests set `SKILLRIG_ORIGIN` deterministically without mutating process env (golang-testing: table-driven, parallel-safe).
-- Returns `ResolutionResult{Origin, Source, ConfigPath}` (see data-model.md).
+- Returns `ResolutionResult{Origin, Source, ConfigPath, Diagnostics}` (see data-model.md). `Diagnostics` carries every source that was present but skipped because it was unusable, so the cause is never silently swallowed.
 
 ## Precedence (FR-002)
 
@@ -25,9 +25,11 @@ A lower source is consulted **only** when every higher source is absent/blank/un
 ## Error / robustness semantics
 
 - Blank `SKILLRIG_ORIGIN` → treated as unset; fall through (matrix row 6).
-- Unparseable or origin-less config file at a source → that source yields "none"; resolution **continues** down precedence (FR-004, matrix row 7). The malformed-file diagnostic is available via `--verbose`; it is never a raw parser dump to the user.
-- `Source=none` is a normal return (not a Go error). The **caller** (e.g. a future command, or `init`'s sibling commands) converts `none` into the actionable "no origin configured" CLI error (exit 1, US3/FR-003).
-- A genuine I/O error (e.g. unreadable file due to permissions) is returned as a Go `error` for the caller to surface with guidance.
+- Unparseable or invalid-origin config file at a source → that source yields "none"; resolution **continues** down precedence (FR-004, matrix row 7). The cause is recorded as a `SourceDiagnostic` in `ResolutionResult.Diagnostics` (not discarded), so a `--verbose` caller can surface it as a clear message — never a raw parser dump. An **origin-less but parseable** file (forward-compat: has other keys, no `origin`) is a quiet fall-through, not a diagnostic.
+- `Source=none` is a normal return (not a Go error). The **caller** (e.g. a future command, or `init`'s sibling commands) converts `none` into the actionable "no origin configured" CLI error (exit 1, US3/FR-003), optionally citing any `Diagnostics`.
+- A genuine I/O error (e.g. unreadable file due to permissions) is returned as a Go `error` for the caller to surface with guidance — it is **fatal**, distinguished from a skippable malformed file by the typed `config.MalformedError`.
+
+> **Implementation note (skillrig-init):** `ResolveOrigin` never silently swallows a bad source. Per source it returns one of: a usable origin; a skippable diagnostic (malformed / invalid origin) with no error; a quiet no-origin fall-through (absent / origin-less); or a fatal I/O error. A future command wiring `--verbose` reads `Diagnostics` — do not re-introduce a silent skip.
 
 ## Determinism
 

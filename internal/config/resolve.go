@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -23,6 +24,19 @@ const (
 	SourceNone Source = "none"
 )
 
+// SourceDiagnostic records a config source that was present but unusable — a
+// malformed file or one whose origin fails OWNER/REPO validation — and was
+// therefore skipped (FR-004). It is the cause a caller surfaces under --verbose
+// instead of a raw parser dump; it is never itself a hard error.
+type SourceDiagnostic struct {
+	// Source is the source the skipped file belonged to (project or global).
+	Source Source
+	// Path is the skipped file's path.
+	Path string
+	// Reason is the human-readable cause (parse error or invalid origin).
+	Reason string
+}
+
 // ResolutionResult is the outcome of ResolveOrigin.
 type ResolutionResult struct {
 	// Origin is the resolved origin, or the zero Origin when Source is none.
@@ -31,6 +45,11 @@ type ResolutionResult struct {
 	Source Source
 	// ConfigPath is the file that supplied it (empty for env and none).
 	ConfigPath string
+	// Diagnostics lists every source that was present but skipped because it
+	// was unusable (malformed / invalid origin), in precedence order. It is
+	// populated regardless of the final Source so a caller can explain, under
+	// --verbose, why a higher-precedence source did not win (FR-004).
+	Diagnostics []SourceDiagnostic
 }
 
 // ResolveOrigin determines the active origin for cwd and env, applying
@@ -44,6 +63,8 @@ type ResolutionResult struct {
 // explicitly set but malformed SKILLRIG_ORIGIN is the one hard error: it is a
 // deliberate override that must be valid.
 func ResolveOrigin(cwd string, env Env) (ResolutionResult, error) {
+	var diags []SourceDiagnostic
+
 	if raw := strings.TrimSpace(env(envOriginKey)); raw != "" {
 		origin, err := ParseOrigin(raw)
 		if err != nil {
@@ -54,8 +75,17 @@ func ResolveOrigin(cwd string, env Env) (ResolutionResult, error) {
 	}
 
 	if path, found := FindProjectConfig(cwd); found {
-		if origin, ok := usableOrigin(path); ok {
-			return ResolutionResult{Origin: origin, Source: SourceProject, ConfigPath: path}, nil
+		origin, ok, diag, err := originFromFile(path, SourceProject)
+		if err != nil {
+			return ResolutionResult{}, err
+		}
+
+		if diag != nil {
+			diags = append(diags, *diag)
+		}
+
+		if ok {
+			return ResolutionResult{Origin: origin, Source: SourceProject, ConfigPath: path, Diagnostics: diags}, nil
 		}
 	}
 
@@ -64,27 +94,64 @@ func ResolveOrigin(cwd string, env Env) (ResolutionResult, error) {
 		return ResolutionResult{}, err
 	}
 
-	if origin, ok := usableOrigin(globalPath); ok {
-		return ResolutionResult{Origin: origin, Source: SourceGlobal, ConfigPath: globalPath}, nil
+	origin, ok, diag, err := originFromFile(globalPath, SourceGlobal)
+	if err != nil {
+		return ResolutionResult{}, err
 	}
 
-	return ResolutionResult{Source: SourceNone}, nil
+	if diag != nil {
+		diags = append(diags, *diag)
+	}
+
+	if ok {
+		return ResolutionResult{Origin: origin, Source: SourceGlobal, ConfigPath: globalPath, Diagnostics: diags}, nil
+	}
+
+	return ResolutionResult{Source: SourceNone, Diagnostics: diags}, nil
 }
 
-// usableOrigin loads the config at path and returns a valid origin from it. Any
-// failure mode — missing file, unreadable, malformed TOML, origin-less, or an
-// origin that fails OWNER/REPO validation — collapses to (zero, false) so the
-// caller skips the source and continues down precedence (FR-004).
-func usableOrigin(path string) (Origin, bool) {
-	cfg, err := Load(path)
-	if err != nil || strings.TrimSpace(cfg.Origin) == "" {
-		return Origin{}, false
+// originFromFile loads one config source and classifies the outcome so the
+// caller can apply FR-004 precisely:
+//
+//   - ok == true                  → a valid origin (no diagnostic, no error)
+//   - ok == false, diag != nil    → file present but unusable (malformed, or an
+//     origin that fails OWNER/REPO): record the diagnostic and continue
+//   - ok == false, diag == nil    → source supplies no origin (absent file, or
+//     a parseable file with no origin key): a normal, silent fall-through
+//   - err != nil                  → a genuine I/O error (e.g. unreadable file):
+//     fatal, returned to the caller (contract resolve.md)
+func originFromFile(path string, source Source) (Origin, bool, *SourceDiagnostic, error) {
+	cfg, loadErr := Load(path)
+
+	var malformed *MalformedError
+
+	switch {
+	case loadErr == nil:
+		// File read and parsed; classify its origin below.
+	case errors.As(loadErr, &malformed):
+		// FR-004: a malformed file is deliberately non-fatal — reported as a
+		// skippable diagnostic, not propagated as an error.
+		return skip(source, path, loadErr.Error())
+	default:
+		// A genuine I/O error (e.g. unreadable file) is fatal (contract resolve.md).
+		return Origin{}, false, nil, loadErr
 	}
 
-	origin, err := ParseOrigin(cfg.Origin)
-	if err != nil {
-		return Origin{}, false
+	if strings.TrimSpace(cfg.Origin) == "" {
+		return Origin{}, false, nil, nil
 	}
 
-	return origin, true
+	origin, parseErr := ParseOrigin(cfg.Origin)
+	if parseErr != nil {
+		// Present file whose origin fails OWNER/REPO: skippable diagnostic.
+		return skip(source, path, parseErr.Error())
+	}
+
+	return origin, true, nil, nil
+}
+
+// skip builds the "present but unusable, continue down precedence" result: no
+// origin, a recorded diagnostic, and no error (the skip is intentional, FR-004).
+func skip(source Source, path, reason string) (Origin, bool, *SourceDiagnostic, error) {
+	return Origin{}, false, &SourceDiagnostic{Source: source, Path: path, Reason: reason}, nil
 }

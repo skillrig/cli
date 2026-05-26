@@ -35,10 +35,27 @@ type Config struct {
 	Origin string `toml:"origin"`
 }
 
+// MalformedError marks a config file that exists but cannot be parsed. The
+// resolver treats it as "no origin from this source" and continues down
+// precedence (FR-004), recording a diagnostic instead of failing — whereas a
+// genuine read/I/O error (not this type) is fatal. Callers distinguish the two
+// with errors.As(&MalformedError{}).
+type MalformedError struct {
+	Path string
+	Err  error
+}
+
+func (e *MalformedError) Error() string {
+	return fmt.Sprintf("malformed config %s: %v", e.Path, e.Err)
+}
+
+func (e *MalformedError) Unwrap() error { return e.Err }
+
 // Load reads and parses the config file at path. A missing file is not an
 // error — it yields the zero Config (the source simply supplies no origin). A
-// malformed file returns an error so the resolver can skip the source (FR-004)
-// and --verbose can surface the cause.
+// malformed file returns a *MalformedError so the resolver can skip the source
+// and surface the cause (FR-004); any other read failure is returned as a plain
+// I/O error, which the resolver treats as fatal.
 func Load(path string) (Config, error) {
 	//nolint:gosec // G304: path is a config location constructed internally
 	// (env + walk-up + fixed global path), not attacker-controlled input;
@@ -54,7 +71,7 @@ func Load(path string) (Config, error) {
 
 	var c Config
 	if err := toml.Unmarshal(data, &c); err != nil {
-		return Config{}, fmt.Errorf("parse %s: %w", path, err)
+		return Config{}, &MalformedError{Path: path, Err: err}
 	}
 
 	return c, nil

@@ -26,11 +26,6 @@ func (o Origin) String() string {
 	return o.Owner + "/" + o.Repo
 }
 
-// IsZero reports whether the origin is the empty value (no owner/repo).
-func (o Origin) IsZero() bool {
-	return o.Owner == "" && o.Repo == ""
-}
-
 // ParseOrigin trims surrounding whitespace and validates s against the
 // OWNER/REPO shape. On failure it returns a usage error that names the expected
 // format and echoes the offending value (FR-012). A blank string is rejected;

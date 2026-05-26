@@ -34,8 +34,10 @@ Same shape as ProjectConfig; the per-user default origin. Written only with `--g
 | `Origin` | Origin | the resolved origin (zero value if none) |
 | `Source` | enum `env` \| `project` \| `global` \| `none` | which source supplied it |
 | `ConfigPath` | string | path of the file used (empty for `env`/`none`) |
+| `Diagnostics` | []SourceDiagnostic | sources that were present but **skipped** because unusable (malformed file, or origin failing `OWNER/REPO`), in precedence order; the cause a caller surfaces under `--verbose` (FR-004). Empty when nothing was skipped. |
 
 - `Source == none` is a distinct, first-class outcome (FR-003) callers convert into the actionable "no origin configured" error (US3).
+- `Diagnostics` is populated regardless of the final `Source` (e.g. a malformed project file skipped on the way to a valid global origin still appears here), so a `--verbose` caller can explain why a higher-precedence source did not win. A `SourceDiagnostic` is `{Source, Path, Reason}`. A genuine I/O error (e.g. an unreadable file) is **not** a diagnostic — it is returned as a Go `error` and is fatal.
 
 ## Canonical fixture — `config.toml` (ground truth)
 

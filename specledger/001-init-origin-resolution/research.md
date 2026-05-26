@@ -72,7 +72,9 @@
 
 ## D9 — Atomic config write
 
-**Decision**: Write to a temp file **in the same target directory** (so it's on the same filesystem/volume) then `os.Rename` over the destination. Preserve a trailing newline; stable key ordering via the struct field order. File mode `0o644`, dir `0o755`.
+**Decision**: Write to a temp file **in the same target directory** (so it's on the same filesystem/volume) then `os.Rename` over the destination. Preserve a trailing newline; stable key ordering via the struct field order. File mode `0o600`, dir `0o750`.
+
+> **Implementation reconciliation (impl session):** shipped with `0o600`/`0o750` rather than the originally drafted `0o644`/`0o755`, to satisfy the gosec G301/G302 baseline (golang-lint skill config). Impact is effectively nil: git tracks only the executable bit, so a committed project `config.toml` normalizes to `644` on clone regardless; the local/global file being user-only (`0600`) is strictly safer for a config that may later hold more than a public `OWNER/REPO`. No requirement depends on group/world readability.
 **Rationale**: Prevents a torn/corrupt `config.toml` on crash and avoids partial writes the resolver might later read (FR-004). Mirrors architecture open-Q10's lockfile-atomicity guidance, applied to config.
 **OS requirements (review comment 2bf31175)**:
 - **POSIX (Linux/macOS)**: `rename(2)` is atomic when source and dest are on the same filesystem — hence the temp file goes in the **target dir**, never `os.TempDir()` (which may be a different mount, turning `os.Rename` into a cross-device `EXDEV` error). ✅

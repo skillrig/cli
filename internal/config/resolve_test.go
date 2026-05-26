@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -149,6 +150,175 @@ func TestResolveOrigin_FromSubdir(t *testing.T) {
 
 	if got.ConfigPath != projPath {
 		t.Errorf("ConfigPath = %q, want %q", got.ConfigPath, projPath)
+	}
+}
+
+// TestResolveOrigin_MalformedProjectRecordsDiagnostic verifies FR-004: a
+// malformed project file is skipped (resolution continues to global) AND its
+// cause is recorded as a diagnostic for a --verbose caller — not silently
+// swallowed.
+func TestResolveOrigin_MalformedProjectRecordsDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	home := t.TempDir()
+	projPath := writeProject(t, cwd, "ignored", true) // malformed TOML
+	writeGlobal(t, home, "personal/skills")
+
+	got, err := ResolveOrigin(cwd, mapEnv(map[string]string{"HOME": home}))
+	if err != nil {
+		t.Fatalf("malformed project must not be fatal, got error: %v", err)
+	}
+
+	if got.Source != SourceGlobal || got.Origin.String() != "personal/skills" {
+		t.Errorf("got %+v, want global personal/skills (project skipped)", got)
+	}
+
+	if len(got.Diagnostics) != 1 {
+		t.Fatalf("Diagnostics = %v, want exactly 1 (the skipped malformed project)", got.Diagnostics)
+	}
+
+	d := got.Diagnostics[0]
+	if d.Source != SourceProject || d.Path != projPath || !strings.Contains(d.Reason, "malformed") {
+		t.Errorf("diagnostic = %+v, want project %s with a 'malformed' reason", d, projPath)
+	}
+}
+
+// TestResolveOrigin_InvalidShapeRecordsDiagnostic verifies a parseable file
+// whose origin fails OWNER/REPO validation is also skipped with a diagnostic.
+func TestResolveOrigin_InvalidShapeRecordsDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	home := t.TempDir()
+	projPath := writeProject(t, cwd, "not a valid shape", false) // parses, bad origin
+	writeGlobal(t, home, "personal/skills")
+
+	got, err := ResolveOrigin(cwd, mapEnv(map[string]string{"HOME": home}))
+	if err != nil {
+		t.Fatalf("invalid-shape project must not be fatal, got error: %v", err)
+	}
+
+	if got.Source != SourceGlobal {
+		t.Errorf("Source = %q, want global (project skipped)", got.Source)
+	}
+
+	if len(got.Diagnostics) != 1 || got.Diagnostics[0].Path != projPath {
+		t.Errorf("Diagnostics = %+v, want 1 entry for %s", got.Diagnostics, projPath)
+	}
+}
+
+// TestResolveOrigin_OriginlessNoDiagnostic verifies a parseable file that
+// simply lacks an origin key is a quiet fall-through (forward-compat), not a
+// diagnostic.
+func TestResolveOrigin_OriginlessNoDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	home := t.TempDir()
+
+	path := filepath.Join(cwd, configDirName, configFileName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte("future_key = \"x\"\n"), 0o600); err != nil {
+		t.Fatalf("write origin-less: %v", err)
+	}
+
+	writeGlobal(t, home, "personal/skills")
+
+	got, err := ResolveOrigin(cwd, mapEnv(map[string]string{"HOME": home}))
+	if err != nil {
+		t.Fatalf("origin-less file must not be fatal: %v", err)
+	}
+
+	if got.Source != SourceGlobal {
+		t.Errorf("Source = %q, want global", got.Source)
+	}
+
+	if len(got.Diagnostics) != 0 {
+		t.Errorf("Diagnostics = %+v, want none for an origin-less (parseable) file", got.Diagnostics)
+	}
+}
+
+// TestResolveOrigin_UnreadableFileIsFatal verifies a genuine I/O error (an
+// existing but unreadable file) is returned as a fatal error, not skipped
+// (contract resolve.md). Skipped when running as root (perms don't restrict).
+func TestResolveOrigin_UnreadableFileIsFatal(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; file permissions do not restrict access")
+	}
+
+	cwd := t.TempDir()
+	path := writeProject(t, cwd, "my-org/my-skills", false)
+
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatalf("chmod 000: %v", err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) }) // let TempDir cleanup remove it
+
+	_, err := ResolveOrigin(cwd, mapEnv(map[string]string{"HOME": t.TempDir()}))
+	if err == nil {
+		t.Fatal("unreadable project config should be a fatal error, got nil")
+	}
+}
+
+// TestResolveOrigin_UnreadableProjectIsFatalDespiteGlobal pins the (contract-
+// specified, debatable) semantic that an unreadable project config is fatal
+// even when a valid global default exists — resolution does not fall through an
+// I/O error (contract resolve.md; adversarial finding A3).
+func TestResolveOrigin_UnreadableProjectIsFatalDespiteGlobal(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; file permissions do not restrict access")
+	}
+
+	cwd := t.TempDir()
+	home := t.TempDir()
+	path := writeProject(t, cwd, "my-org/my-skills", false)
+	writeGlobal(t, home, "personal/skills") // a usable global that must NOT mask the error
+
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatalf("chmod 000: %v", err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+
+	if _, err := ResolveOrigin(cwd, mapEnv(map[string]string{"HOME": home})); err == nil {
+		t.Fatal("unreadable project config must be fatal even with a valid global, got nil")
+	}
+}
+
+// TestResolveOrigin_MalformedEnvIsFatal verifies the resolver's one hard-error
+// branch: an explicitly set but malformed SKILLRIG_ORIGIN is a deliberate
+// override that must be valid — it errors rather than falling through to file
+// sources (adversarial finding A1). Distinct from a blank env, which is unset
+// (matrix row 6).
+func TestResolveOrigin_MalformedEnvIsFatal(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	home := t.TempDir()
+	// A valid project origin exists; the malformed env override must NOT fall
+	// through to it — it must hard-error.
+	writeProject(t, cwd, "my-org/my-skills", false)
+
+	_, err := ResolveOrigin(cwd, mapEnv(map[string]string{
+		"SKILLRIG_ORIGIN": "not a valid origin",
+		"HOME":            home,
+	}))
+	if err == nil {
+		t.Fatal("malformed SKILLRIG_ORIGIN should be a fatal error, got nil")
+	}
+
+	// Error names the offending variable and the underlying cause.
+	if !strings.Contains(err.Error(), "SKILLRIG_ORIGIN") {
+		t.Errorf("error %q should name SKILLRIG_ORIGIN", err)
 	}
 }
 
