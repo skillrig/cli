@@ -70,7 +70,9 @@ func TestResolveOrigin_Precedence(t *testing.T) {
 		{name: "row4_global", globalOrigin: "personal/skills", wantOrigin: "personal/skills", wantSource: SourceGlobal, wantPathIsGlobal: true},
 		{name: "row5_project_beats_global", projectOrigin: "client-a/skills", globalOrigin: "personal/skills", wantOrigin: "client-a/skills", wantSource: SourceProject, wantPathIsProj: true},
 		{name: "row6_blank_env_is_unset", envOrigin: "   ", projectOrigin: "my-org/my-skills", wantOrigin: "my-org/my-skills", wantSource: SourceProject, wantPathIsProj: true},
-		{name: "row7_malformed_project_skipped", projectOrigin: "ignored", projectMalformed: true, globalOrigin: "personal/skills", wantOrigin: "personal/skills", wantSource: SourceGlobal, wantPathIsGlobal: true},
+		{name: "row7_malformed_project_skipped", projectOrigin: "ignored", projectMalformed: true, globalOrigin: "personal/skills", wantOrigin: "personal/skills", wantSource: SourceGlobal, wantPathIsProj: false, wantPathIsGlobal: true},
+		{name: "row8_project_ref_survives", projectOrigin: "my-org/my-skills@staging", wantOrigin: "my-org/my-skills@staging", wantSource: SourceProject, wantPathIsProj: true},
+		{name: "row9_env_ref_survives", envOrigin: "ci-org/ci-skills@main", projectOrigin: "my-org/my-skills", wantOrigin: "ci-org/ci-skills@main", wantSource: SourceEnv},
 	}
 
 	for _, tc := range rows {
@@ -201,6 +203,34 @@ func TestResolveOrigin_InvalidShapeRecordsDiagnostic(t *testing.T) {
 
 	if got.Source != SourceGlobal {
 		t.Errorf("Source = %q, want global (project skipped)", got.Source)
+	}
+
+	if len(got.Diagnostics) != 1 || got.Diagnostics[0].Path != projPath {
+		t.Errorf("Diagnostics = %+v, want 1 entry for %s", got.Diagnostics, projPath)
+	}
+}
+
+// TestResolveOrigin_MalformedRefRecordsDiagnostic verifies the @REF branch of
+// the shape check end-to-end: a config whose OWNER/REPO is valid but whose @REF
+// is malformed (here a space) is skipped with a diagnostic — resolution falls
+// through to global, non-fatal (FR-004 applied to the ref, amendment
+// 001-origin-ref-support). This exercises the refPattern reject path that the
+// owner/repo-only invalid-shape test never reaches.
+func TestResolveOrigin_MalformedRefRecordsDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	home := t.TempDir()
+	projPath := writeProject(t, cwd, "my-org/my-skills@bad ref", false) // valid TOML, bad ref shape
+	writeGlobal(t, home, "personal/skills")
+
+	got, err := ResolveOrigin(cwd, mapEnv(map[string]string{"HOME": home}))
+	if err != nil {
+		t.Fatalf("malformed-ref project must not be fatal, got error: %v", err)
+	}
+
+	if got.Source != SourceGlobal || got.Origin.String() != "personal/skills" {
+		t.Errorf("got %+v, want global personal/skills (project skipped)", got)
 	}
 
 	if len(got.Diagnostics) != 1 || got.Diagnostics[0].Path != projPath {

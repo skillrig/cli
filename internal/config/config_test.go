@@ -35,6 +35,49 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSaveLoadRoundTripWithRef verifies an origin carrying an @ref round-trips
+// through Save/Load inside the single `origin` key — the ref is stored combined
+// (origin = 'my-org/my-skills@main'), so no config-schema change is needed
+// (amendment 001-origin-ref-support).
+func TestSaveLoadRoundTripWithRef(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, configDirName, configFileName)
+	origin := Origin{Owner: "my-org", Repo: "my-skills", Ref: "main"}
+
+	if err := Save(path, origin); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read written file: %v", err)
+	}
+
+	if string(raw) != "origin = 'my-org/my-skills@main'\n" {
+		t.Errorf("written config = %q, want origin = 'my-org/my-skills@main'", raw)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if got.Origin != origin.String() {
+		t.Errorf("round-trip origin = %q, want %q", got.Origin, origin.String())
+	}
+
+	parsed, err := ParseOrigin(got.Origin)
+	if err != nil {
+		t.Fatalf("ParseOrigin(%q): %v", got.Origin, err)
+	}
+
+	if parsed.Ref != "main" {
+		t.Errorf("parsed ref = %q, want main", parsed.Ref)
+	}
+}
+
 // TestSaveMatchesFixture anchors Save's byte-for-byte output to the committed
 // ground-truth fixture (Constitution III). go-toml/v2 emits TOML literal
 // strings (single-quoted) for values needing no escaping; the fixture is the

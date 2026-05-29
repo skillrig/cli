@@ -6,14 +6,14 @@
 ## Synopsis
 
 ```
-skillrig init [--origin OWNER/REPO] [--global] [--non-interactive] [--json] [--verbose]
+skillrig init [--origin OWNER/REPO[@REF]] [--global] [--non-interactive] [--json] [--verbose]
 ```
 
 ## Flags
 
 | Flag | Type | Default | Meaning |
 |------|------|---------|---------|
-| `--origin` | string | "" | Origin to bind, `OWNER/REPO`. If omitted: prompt in an interactive TTY; error in non-interactive. |
+| `--origin` | string | "" | Origin to bind, `OWNER/REPO[@REF]`. The optional `@REF` tracks a branch (amendment [001-origin-ref-support](../amendments/001-origin-ref-support.md)). If omitted: prompt in an interactive TTY; error in non-interactive. |
 | `--global` | bool | false | Write the per-user global default (`$XDG_CONFIG_HOME/skillrig/config.toml` or `~/.config/skillrig/config.toml`) instead of the repo project config. |
 | `--non-interactive` | bool | false | Force non-interactive mode: never prompt. If required flags such `--origin` are omitted, fail (exit 1) instead of prompting, **even on an interactive TTY** (FR-006c). For scripts/agents that must not block on input. |
 | `--json` | bool | false | Emit the complete result object on stdout instead of compact human text. |
@@ -40,7 +40,7 @@ Examples:
 
 1. Resolve write target: `--global` → global config path; else the **git repo root** via `git rev-parse --show-toplevel` (offline) → `<repo-root>/.skillrig/config.toml`; if not inside a git repo, fall back to `./.skillrig/config.toml` in cwd (create `.skillrig/` if missing — FR-010).
 2. Determine origin: `--origin` value; else if `--non-interactive` is set → usage error without prompting (FR-006c); else if interactive TTY → prompt once on stderr; else (no TTY) usage error (FR-006a).
-3. `ParseOrigin` → on invalid shape, usage error, no write (FR-012).
+3. `ParseOrigin` → splits the optional `@REF` and validates both parts shape-only/offline; on invalid shape, usage error, no write (FR-012 / FR-018, FR-019). A valid `@REF` is carried on the resolved origin and stored combined in the `origin` key (FR-020).
 4. Load existing config at target (if any). Compare:
    - none present → write, `written=true`.
    - equal origin → no-op, `written=false` (idempotent, FR-008).
@@ -69,9 +69,9 @@ Keys always present: `ok, origin, scope, configPath, written`. `scope ∈ {proje
 
 | Condition | Exit | Message shape |
 |-----------|------|---------------|
-| `--origin` omitted, non-interactive **session** (no TTY) | 1 | what: no origin given; why: non-interactive session (no TTY); fix: pass `--origin OWNER/REPO` or set `SKILLRIG_ORIGIN`. |
-| `--origin` omitted, `--non-interactive` **forced** (even on a TTY) | 1 | what: no origin given; why: non-interactive mode requested (`--non-interactive`); fix: pass `--origin OWNER/REPO` or set `SKILLRIG_ORIGIN`. |
-| Malformed origin | 1 | what: invalid origin `<value>`; why: expected `OWNER/REPO`; fix: e.g. `skillrig init --origin my-org/my-skills`. |
+| `--origin` omitted, non-interactive **session** (no TTY) | 1 | what: no origin given; why: non-interactive session (no TTY); fix: pass `--origin OWNER/REPO[@REF]` or set `SKILLRIG_ORIGIN`. |
+| `--origin` omitted, `--non-interactive` **forced** (even on a TTY) | 1 | what: no origin given; why: non-interactive mode requested (`--non-interactive`); fix: pass `--origin OWNER/REPO[@REF]` or set `SKILLRIG_ORIGIN`. |
+| Malformed origin (incl. malformed `@REF`) | 1 | what: invalid origin `<value>`; why: expected `OWNER/REPO[@REF]`; fix: e.g. `skillrig init --origin my-org/my-skills` or `--origin my-org/my-skills@main`. |
 | Config dir/file not writable | 1 | what: cannot write `<path>`; why: `<raw os error>`; fix: check permissions / path. |
 
 Exit `0` on success (including idempotent no-op). Codes `2`/`3` not used by this command.

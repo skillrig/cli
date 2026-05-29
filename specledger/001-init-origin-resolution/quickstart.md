@@ -36,6 +36,16 @@ $ skillrig init --origin my-org/my-skills --json
 - **stdout**: single JSON object.
 - **shape assert**: `json.Unmarshal` succeeds AND keys `ok, origin, scope, configPath, written` all present; `ok==true`, `origin=="my-org/my-skills"`, `scope=="project"`, `written==true`.
 
+### TestQuickstart_BindWithRef  (FR-018, FR-019, FR-020 — amendment [001-origin-ref-support](amendments/001-origin-ref-support.md))
+```
+$ skillrig init --origin my-org/my-skills@staging
+```
+- **exit**: 0
+- **stdout** (human, compact): line 1 contains `bound origin my-org/my-skills@staging` and `project`; line 2 is the `→ resolve order:` footer hint.
+- **file** `./.skillrig/config.toml` is `origin = 'my-org/my-skills@staging'` (the optional `@REF` stored combined in the single key).
+- **`--json`** (variant): `origin == "my-org/my-skills@staging"`.
+- **shape assert**: `len(stdoutLines) <= 2`.
+
 ### TestQuickstart_IdempotentRebind  (US1 / FR-008)
 ```
 $ skillrig init --origin my-org/my-skills
@@ -151,6 +161,9 @@ project `client-a/skills` + global `personal/skills` → `client-a/skills`, `Sou
 ### TestResolveOrigin_Row7_MalformedProjectSkipped  (FR-004)
 unparseable project `config.toml` + global `personal/skills` → `personal/skills`, `Source==global`; resolution does not error on the bad file.
 
+### TestResolveOrigin_Row8_9_RefSurvives  (FR-020 — amendment [001-origin-ref-support](amendments/001-origin-ref-support.md))
+project `my-org/my-skills@staging` → resolves `my-org/my-skills@staging`, `Source==project`; env `ci-org/ci-skills@main` over a ref-less project → resolves `ci-org/ci-skills@main`, `Source==env`. Proves the optional `@REF` round-trips through resolution unchanged.
+
 ### TestResolveOrigin_FromSubdir  (US2 / SC-002)
 project config at `<tmp>/.skillrig/config.toml`; call `ResolveOrigin` with `cwd=<tmp>/a/b/c` → resolves `my-org/my-skills` via walk-up, `Source==project`.
 
@@ -161,6 +174,7 @@ project config at `<tmp>/.skillrig/config.toml`; call `ResolveOrigin` with `cwd=
 | Scenario | Covers |
 |----------|--------|
 | BindProject / BindProjectJSON | US1, FR-005, FR-010, FR-016 |
+| BindWithRef | FR-018, FR-019, FR-020 (optional `@REF` branch tracking) |
 | IdempotentRebind | FR-008, SC-005 |
 | RebindDifferent | FR-009 |
 | Global | FR-007 |

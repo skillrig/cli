@@ -14,10 +14,10 @@ import (
 
 // originPromptLabel is the single interactive prompt (research D5: one stdlib
 // bufio read on stderr, no retry loop).
-const originPromptLabel = "Origin (OWNER/REPO): "
+const originPromptLabel = "Origin (OWNER/REPO[@REF]): "
 
 // missingOriginFix is the shared fix line for the no-origin error paths.
-const missingOriginFix = "fix: pass --origin OWNER/REPO (e.g. --origin my-org/my-skills) or set SKILLRIG_ORIGIN"
+const missingOriginFix = "fix: pass --origin OWNER/REPO[@REF] (e.g. --origin my-org/my-skills or --origin my-org/my-skills@main) or set SKILLRIG_ORIGIN"
 
 // initCmd holds the init command's flags and its injectable seams. Production
 // uses the os-backed defaults; tests inject deterministic stubs (interactivity,
@@ -52,11 +52,15 @@ func newInitCmd(opts *globalOpts) *cobra.Command {
 		Short: "Bind this repo (or your global default) to an origin",
 		Long: "Bind a repository — or your per-user global default — to an existing origin,\n" +
 			"the OWNER/REPO that hosts your team's agent skills, by recording it in config.\n" +
+			"Append @REF to track a specific branch (e.g. my-org/my-skills@staging); omit it\n" +
+			"to track the origin's default branch.\n" +
 			"init is idempotent and consume-only: it does not create or scaffold an origin.\n\n" +
 			"Without --origin, init prompts on an interactive terminal; with --non-interactive\n" +
 			"(or no TTY) it fails fast instead of prompting, so scripts and agents never block.",
 		Example: "  # Bind the current repo to an existing origin\n" +
 			"  skillrig init --origin my-org/my-skills\n\n" +
+			"  # Track a specific branch of the origin\n" +
+			"  skillrig init --origin my-org/my-skills@staging\n\n" +
 			"  # Set your personal default origin (used when a repo has none)\n" +
 			"  skillrig init --origin my-org/my-skills --global",
 		Args: cobra.NoArgs,
@@ -65,7 +69,7 @@ func newInitCmd(opts *globalOpts) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&ic.origin, "origin", "", "origin to bind, OWNER/REPO (prompted if omitted on a TTY)")
+	cmd.Flags().StringVar(&ic.origin, "origin", "", "origin to bind, OWNER/REPO[@REF] where @REF tracks a branch (prompted if omitted on a TTY)")
 	cmd.Flags().BoolVar(&ic.global, "global", false, "write the per-user global default instead of the repo config")
 	cmd.Flags().BoolVar(&ic.nonInteractive, "non-interactive", false, "never prompt; fail fast if --origin is missing")
 

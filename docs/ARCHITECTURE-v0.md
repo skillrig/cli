@@ -123,6 +123,8 @@ skillrig is a *framework* any org can adopt, not a single-org tool. Three pieces
 
 Lower-priority sources fill in only what higher ones omit (like git local > global > system) — so a contractor can target client-A's origin in one repo and client-B's in another, while keeping a personal global default.
 
+**Origin reference shape — `OWNER/REPO[@REF]`.** The origin reference accepts an optional `@REF` suffix that tracks a **branch** of the library (e.g. `my-org/my-skills@staging`); omitted, it tracks the default branch. It is stored combined in the single `origin` key and validated shape-only/offline. This realizes the `@ref` half of the R26 identity grammar (§9b) for origins specifically — note the *origin's* `@ref` is a moving branch pointer, whereas a *skill's* pin (`add --pin`) is an immutable tag/SHA. The `[/path]` portion of the grammar remains future work.
+
 **Config vs. lock — separate files, co-located dir.** Input and tool-output have different natures and must not share a file (you'd get merge conflicts on hand-edited bits whenever the tool rewrites generated bits — the reason npm splits `package.json` from `package-lock.json`). So:
 ```
 .skillrig/
@@ -310,7 +312,7 @@ Verified against mise's GitHub backend docs (current as of early 2026). Three fi
 
 ## 9b. External sources, allowlist & audit (R26–R29) — v1+ governance, designed-for in v0
 
-**Identity grammar (R26) — v0 foundation.** Adopt the ecosystem-standard reference grammar `OWNER/REPO[/path]@ref` + skill name. This is the format both Vercel `npx skills` and GitHub `gh skill` use (`gh skill install github/awesome-copilot documentation-writer@v1.2.0`, with nested-path discovery via the `skills/*/SKILL.md` convention). Use it as the **single key** for: lockfile entries (§4.2), `index.json` rows, and allowlist entries. One grammar, three consumers — an allowlist entry is literally "a source-ref pattern that lock entries are permitted to match."
+**Identity grammar (R26) — v0 foundation.** Adopt the ecosystem-standard reference grammar `OWNER/REPO[/path]@ref` + skill name. This is the format both Vercel `npx skills` and GitHub `gh skill` use (`gh skill install github/awesome-copilot documentation-writer@v1.2.0`, with nested-path discovery via the `skills/*/SKILL.md` convention). Use it as the **single key** for: lockfile entries (§4.2), `index.json` rows, and allowlist entries. One grammar, three consumers — an allowlist entry is literally "a source-ref pattern that lock entries are permitted to match." *(Implemented so far: the origin reference realizes `OWNER/REPO[@REF]` with `@REF` as a branch pointer — see §2d; `[/path]` and lock/allowlist consumers are still future work.)*
 
 **Allowlist (R27) — policy data in the monorepo.** Author an `allowlist` section consumed by the `index.json` build (or a sibling `policy.toml`), listing permitted external sources at `OWNER/REPO[/path]` granularity, optionally pinned with `@ref`. Because it ships with the org-controlled source of truth, `doctor` evaluates "is this source permitted?" as a **deterministic offline lookup** (N6) — never inference.
 

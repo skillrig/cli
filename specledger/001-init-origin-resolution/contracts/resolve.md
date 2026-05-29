@@ -12,6 +12,7 @@ func ResolveOrigin(cwd string, env Env) (ResolutionResult, error)
 
 - `env` is an injected accessor (e.g. `func(key string) string`) so tests set `SKILLRIG_ORIGIN` deterministically without mutating process env (golang-testing: table-driven, parallel-safe).
 - Returns `ResolutionResult{Origin, Source, ConfigPath, Diagnostics}` (see data-model.md). `Diagnostics` carries every source that was present but skipped because it was unusable, so the cause is never silently swallowed.
+- The resolved `Origin` MAY carry an optional `Ref` (amendment [001-origin-ref-support](../amendments/001-origin-ref-support.md)). The resolver applies **no** special handling: the ref lives inside the origin string each source supplies, so it passes through `ParseOrigin`/`String()` unchanged — precedence and structure are untouched.
 
 ## Precedence (FR-002)
 
