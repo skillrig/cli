@@ -5,6 +5,8 @@
 **Status**: Draft
 **Input**: User description: "Build `skillrig init` and the single origin-resolution primitive for the generic skillrig CLI."
 
+> **Amendments**: [amendments/001-origin-ref-support.md](./amendments/001-origin-ref-support.md) (2026-05-29) extends the origin reference from `OWNER/REPO` to `OWNER/REPO[@REF]`, adding an optional branch/ref (FR-018–FR-020). Where this spec says the shape is `OWNER/REPO`, read `OWNER/REPO[@REF]`.
+
 ## Overview
 
 skillrig is a single generic binary shared by every org; it carries **no baked-in origin**. The "origin" — the org's private git monorepo that is the source of truth for its skills (e.g. `my-org/my-skills`) — is supplied by the consumer at runtime. This feature delivers the two foundational capabilities every later command depends on:
@@ -111,7 +113,7 @@ A developer or agent runs a command that needs an origin in a repo that was neve
 - **FR-009**: The command MUST update the recorded origin when invoked with a different value, replacing the prior value cleanly.
 - **FR-010**: The command MUST create any missing config directory/file needed to store the origin.
 - **FR-011**: The command MUST bind only to an origin the consumer supplies; it MUST NOT create, scaffold, or bootstrap an origin repository. (Standing up an origin is out of scope — see Out of Scope.)
-- **FR-012**: The command MUST validate that a supplied origin matches the expected `OWNER/REPO` shape and reject malformed values without writing config.
+- **FR-012**: The command MUST validate that a supplied origin matches the expected `OWNER/REPO` shape and reject malformed values without writing config. *(Amended: `OWNER/REPO[@REF]` — see FR-018–FR-020 in [amendments/001-origin-ref-support.md](./amendments/001-origin-ref-support.md).)*
 
 **Command experience (baseline conformance, inherited by all later commands)**
 
@@ -123,7 +125,7 @@ A developer or agent runs a command that needs an origin in a repo that was neve
 
 ### Key Entities *(include if feature involves data)*
 
-- **Origin reference**: an identifier for the org's skill source in `OWNER/REPO` form (e.g. `my-org/my-skills`). The single value this feature reads, validates, records, and resolves.
+- **Origin reference**: an identifier for the org's skill source in `OWNER/REPO[@REF]` form (e.g. `my-org/my-skills` or `my-org/my-skills@staging`). The single value this feature reads, validates, records, and resolves. The optional `@REF` tracks a branch ([amendments/001-origin-ref-support.md](./amendments/001-origin-ref-support.md)).
 - **Project config**: per-repo, committed configuration that records the repo's origin so the repo is self-describing to any clone/agent/CI. Hand-editable input.
 - **Global default config**: per-user configuration recording the developer's default origin, used when a repo has no project config.
 - **Environment override**: a runtime-supplied origin (highest precedence) for ephemeral/CI use that does not touch any file.
@@ -164,7 +166,7 @@ This feature is the first to exercise the project constitution; the following mu
 
 **Assumptions**:
 
-- The origin identifier shape is `OWNER/REPO` (two non-empty, slash-separated segments); deeper validation (does the repo exist / is it reachable) is deliberately deferred because this feature is offline.
+- The origin identifier shape is `OWNER/REPO` (two non-empty, slash-separated segments) — amended to `OWNER/REPO[@REF]` with an optional branch/ref ([amendments/001-origin-ref-support.md](./amendments/001-origin-ref-support.md)); deeper validation (does the repo or ref exist / is it reachable) is deliberately deferred because this feature is offline.
 - Config is stored as a small, hand-editable file at a project-scoped location and a per-user global location, consistent with the architecture's `config.toml` decision; the input config and any tool-written output (lockfiles) are separate concerns (lockfiles are out of scope here). The canonical, detailed config-file structure is maintained on the project docs website and referenced rather than restated here.
 - A developer running global mode wants only the per-user default written, never the repo config.
 

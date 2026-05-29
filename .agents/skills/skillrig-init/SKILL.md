@@ -5,9 +5,10 @@ description: >-
   and understand how skillrig resolves the active origin. Use when the user wants to
   "point this repo at our skills library", "set the origin", configure where skills come
   from, set up `skillrig` in a repo, choose between a project vs global default origin,
-  use the `SKILLRIG_ORIGIN` environment variable, or fix a "no origin configured" /
-  "no origin given" error. Triggers on `skillrig init`, origin binding (OWNER/REPO),
-  and origin-resolution precedence questions.
+  track a specific branch of the origin (OWNER/REPO@branch), use the `SKILLRIG_ORIGIN`
+  environment variable, or fix a "no origin configured" / "no origin given" error.
+  Triggers on `skillrig init`, origin binding (OWNER/REPO[@REF]), pointing at a branch
+  of the skills repo, and origin-resolution precedence questions.
 license: MIT
 metadata:
   author: skillrig
@@ -29,6 +30,13 @@ metadata:
 **consume-only** — it never creates or scaffolds an origin, never reaches the network,
 and binding the same origin twice is a no-op.
 
+The origin reference is `OWNER/REPO[@REF]`. The optional `@REF` tracks a specific
+**branch** of the library (e.g. `my-org/my-skills@staging`); omit it to track the
+default branch. The `@REF` is validated for shape only (offline) — it is **not** checked
+against the remote — and is stored combined in the single `origin` key. (Note: an
+origin's `@ref` is a moving branch pointer; pinning an individual *skill* to an immutable
+tag/SHA is a separate, later concern.)
+
 It writes one of two config files:
 
 - **Project** (default): `.skillrig/config.toml` at the **git repository root** (located
@@ -44,7 +52,7 @@ It writes one of two config files:
 
 | Flag | Purpose | When to use |
 |------|---------|-------------|
-| `--origin OWNER/REPO` | The origin to bind | Always prefer passing it explicitly (scripts/agents) |
+| `--origin OWNER/REPO[@REF]` | The origin to bind; optional `@REF` tracks a branch | Always prefer passing it explicitly (scripts/agents); add `@branch` to track a non-default branch |
 | `--global` | Write the per-user default instead of the repo config | Setting a fallback used across all your repos |
 | `--non-interactive` | Never prompt; fail fast if `--origin` is missing | CI/agents that must not block on input |
 | `--json` | Emit a complete result object on stdout | Machine consumption |
@@ -93,16 +101,18 @@ present; branch on `written` to tell a fresh bind from an idempotent no-op:
 
 1. **Bind a repo**: `skillrig init --origin my-org/my-skills` → run from anywhere in the
    repo; config lands at the repo root.
-2. **Personal default**: `skillrig init --origin my-org/my-skills --global`.
-3. **CI / agent**: pass `--origin` (or set `SKILLRIG_ORIGIN`) **and** `--non-interactive`
+2. **Track a branch**: `skillrig init --origin my-org/my-skills@staging` → records the
+   origin pinned to the `staging` branch (stored as `origin = 'my-org/my-skills@staging'`).
+3. **Personal default**: `skillrig init --origin my-org/my-skills --global`.
+4. **CI / agent**: pass `--origin` (or set `SKILLRIG_ORIGIN`) **and** `--non-interactive`
    so the command never prompts.
-4. **One-off override**: `SKILLRIG_ORIGIN=ci-org/ci-skills skillrig <cmd>` — no file edit.
+5. **One-off override**: `SKILLRIG_ORIGIN=ci-org/ci-skills skillrig <cmd>` — no file edit.
 
 ## Error Handling
 
 | Symptom (stderr) | Cause | Fix |
 |------------------|-------|-----|
-| `invalid origin "<value>": expected OWNER/REPO` | Origin not in `OWNER/REPO` shape | Pass a valid `--origin my-org/my-skills` |
+| `invalid origin "<value>": expected OWNER/REPO[@REF]` | Origin (or its `@REF`) not in `OWNER/REPO[@REF]` shape | Pass a valid `--origin my-org/my-skills` (or `--origin my-org/my-skills@main`) |
 | `no origin given … non-interactive session (no TTY)` | `init` run without `--origin` and stdin is not a terminal | Pass `--origin OWNER/REPO` or set `SKILLRIG_ORIGIN` |
 | `no origin given … non-interactive mode requested (--non-interactive)` | `--non-interactive` set but no `--origin` | Pass `--origin OWNER/REPO` or set `SKILLRIG_ORIGIN` |
 | "no origin configured" from a later command | No source supplied an origin | Run `skillrig init --origin OWNER/REPO`, or set `SKILLRIG_ORIGIN`, or add a `--global` default |

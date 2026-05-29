@@ -2,9 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> PRE-RELEASE MARKER: As long as this marker is present we NEVER PLAN BACKWARD COMPATBILITY. We are in rapid iteration and may make breaking changes to the CLI and/or skill contract at any time. ANY PLAN IGNORES BACKWARD COMPATIBILITY.
+
 ## What this is
 
-`skillrig` is a single, generic, **consume-only** Go CLI for pointing a repo (or a per-user default) at an **origin** — the `OWNER/REPO` that hosts an org's agent skills — and managing vendored skills from it. The same binary serves humans, agents, and CI. There is no `publish`/`login` and no write credential in the binary: GitHub is the authority plane ("publishing" = a PR to the origin).
+`skillrig` is a single, generic, **consume-only** Go CLI for pointing a repo (or a per-user default) at an **origin** — the `OWNER/REPO[@REF]` that hosts an org's agent skills — and managing vendored skills from it. The same binary serves humans, agents, and CI. There is no `publish`/`login` and no write credential in the binary: GitHub is the authority plane ("publishing" = a PR to the origin).
 
 Two design documents are binding and override general instincts:
 - `.specledger/memory/constitution.md` — development principles (spec-first, quickstart-as-contract, YAGNI, skill–CLI co-evolution).

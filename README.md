@@ -2,7 +2,8 @@
 
 `skillrig` is a CLI for pointing a repository (or your per-user default) at an
 **origin** — the `OWNER/REPO` that hosts your team's agent skills — and resolving
-which origin is active for any working directory.
+which origin is active for any working directory. An origin reference is
+`OWNER/REPO[@REF]`; the optional `@REF` tracks a specific branch.
 
 > NOTE: a skillrig **origin** is a GitHub repository with a determined structure, use the template repository provided to create your own origin.
 
@@ -27,6 +28,14 @@ This writes `.skillrig/config.toml` at the git repository root (or the current
 directory if you are not inside a git repo). `init` is **idempotent** and
 **consume-only**: it records an existing origin, never creates or scaffolds one,
 and binding the same origin twice is a no-op.
+
+```sh
+# Track a specific branch of the origin instead of its default branch.
+skillrig init --origin my-org/my-skills@staging
+```
+
+The optional `@REF` is validated for shape only (offline) — it is not checked
+against the remote.
 
 ### Set a personal default
 
@@ -82,6 +91,12 @@ The v0 `config.toml` holds a single key:
 
 ```toml
 origin = 'my-org/my-skills'
+```
+
+To track a branch, the optional `@REF` is stored combined in the same key:
+
+```toml
+origin = 'my-org/my-skills@staging'
 ```
 
 Unknown keys are ignored on read, so config added by later versions will not break this

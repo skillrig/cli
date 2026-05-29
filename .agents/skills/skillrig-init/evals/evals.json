@@ -33,5 +33,17 @@
       { "id": "3.2", "text": "Offers concrete fixes: run `skillrig init --origin OWNER/REPO`, set SKILLRIG_ORIGIN, or set a --global default" },
       { "id": "3.3", "text": "Notes the project config is found by walking up from the current directory (works from subdirectories)" }
     ]
+  },
+  {
+    "id": 4,
+    "name": "track-a-branch",
+    "description": "User wants the repo to follow a specific branch of the skills library — should append @REF to the origin (OWNER/REPO@branch), not invent a separate flag.",
+    "prompt": "Our skills repo acme/agent-skills has a 'staging' branch we want to try before it merges. How do I point this repo at that branch with skillrig?",
+    "trap": "Model invents a non-existent flag (e.g. --branch/--ref), claims skillrig verifies the branch exists over the network, or conflates this with pinning an individual skill to a tag/SHA.",
+    "assertions": [
+      { "id": "4.1", "text": "Recommends `skillrig init --origin acme/agent-skills@staging` (the @REF suffix on the single --origin string)" },
+      { "id": "4.2", "text": "Does NOT invent a separate --branch/--ref flag; the ref rides inside the origin reference" },
+      { "id": "4.3", "text": "Notes the @REF is validated for shape only / offline — existence on the remote is not checked" }
+    ]
   }
 ]

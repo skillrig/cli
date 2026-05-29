@@ -5,20 +5,21 @@
 ## Entities
 
 ### Origin
-The org's skill source, in `OWNER/REPO` form. The single value this feature reads, validates, records, and resolves.
+The org's skill source, in `OWNER/REPO[@REF]` form. The single value this feature reads, validates, records, and resolves.
 
 | Field | Type | Rules |
 |-------|------|-------|
 | `Owner` | string | non-empty, charset `[A-Za-z0-9._-]` |
 | `Repo`  | string | non-empty, charset `[A-Za-z0-9._-]` |
+| `Ref`   | string | **optional** (amendment [001-origin-ref-support](amendments/001-origin-ref-support.md)); charset `[A-Za-z0-9._/-]`; empty = default branch |
 
-- Constructed via `ParseOrigin(s string) (Origin, error)`: trims whitespace, matches `^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`. On failure returns a usage error naming the expected format and echoing the offending value (FR-012).
-- `String()` renders `Owner/Repo`.
+- Constructed via `ParseOrigin(s string) (Origin, error)`: trims whitespace, splits on the first `@` into `OWNER/REPO` and `REF`, matches `OWNER/REPO` against `^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$` and (when present) `REF` against `^[A-Za-z0-9._/-]+$`. On failure returns a typed `*InvalidOriginError` carrying the offending value (presentation-free); `internal/cli` renders the expected-`OWNER/REPO[@REF]` what/why/fix guidance (FR-012 / FR-018).
+- `String()` renders `Owner/Repo`, appending `@Ref` when a ref is set.
 
 ### ProjectConfig  → `.skillrig/config.toml` (committed, hand-editable INPUT)
 | Field | TOML key | Type | Notes |
 |-------|----------|------|-------|
-| `Origin` | `origin` | string | `OWNER/REPO`; the only field this feature reads/writes |
+| `Origin` | `origin` | string | `OWNER/REPO[@REF]`; the only field this feature reads/writes. The optional `@REF` is stored combined in this one key (`origin = 'my-org/my-skills@staging'`) — no separate key (amendment [001-origin-ref-support](amendments/001-origin-ref-support.md), FR-020) |
 
 > Forward-compatibility: unknown keys in `config.toml` are **ignored** on read (not an error), so fields added later (client targets, adoption policy — architecture §2d) don't break this version. Detailed/extended config structure is documented on the project docs website, not restated here (spec clarification).
 
@@ -68,6 +69,8 @@ That is the entire v0 file: one `origin` key. The byte-for-byte output of `init`
 | 5 | – | ✓ `client-a/skills` | ✓ `personal/skills` | `client-a/skills` | `project` |
 | 6 | ✓ (blank) | ✓ `my-org/my-skills` | – | `my-org/my-skills` | `project` (blank env = unset) |
 | 7 | – | (malformed/unparseable file) | ✓ `personal/skills` | `personal/skills` | `global` (bad project source skipped, FR-004) |
+| 8 | – | ✓ `my-org/my-skills@staging` | – | `my-org/my-skills@staging` | `project` (optional `@REF` survives resolution — amendment [001-origin-ref-support](amendments/001-origin-ref-support.md), FR-020) |
+| 9 | ✓ `ci-org/ci-skills@main` | ✓ `my-org/my-skills` | – | `ci-org/ci-skills@main` | `env` (`@REF` survives) |
 
 Rows map directly to table-driven resolver unit tests and to quickstart precedence scenarios.
 
@@ -87,7 +90,7 @@ No deletion, no other transitions in scope.
 
 | Rule | Where | Failure → |
 |------|-------|-----------|
-| Origin matches `OWNER/REPO` | `ParseOrigin` (init write + resolved value) | usage error, exit 1, no write (FR-012) |
+| Origin matches `OWNER/REPO[@REF]` (ref optional, shape-only) | `ParseOrigin` (init write + resolved value) | usage error, exit 1, no write (FR-012 / FR-018, FR-019) |
 | Blank `SKILLRIG_ORIGIN` = unset | resolver | fall through precedence |
 | Unparseable/origin-less config = "none from this source" | resolver | skip source, continue; clear diagnostic, not raw dump (FR-004) |
 | No origin in any source | resolver → caller | actionable "no origin configured" error, exit 1 (US3, FR-003) |

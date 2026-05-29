@@ -18,7 +18,7 @@ Quick reference for contributors. Every `skillrig` subcommand must satisfy these
 4. **JSON output is complete** — full data, pipeable to `jq`, no truncation
 5. **Errors to stderr, data to stdout** — enables clean piping
 6. **Positional args for simple cases** — reserve flags for optional/complex params
-7. **Origin is resolved, never baked in** — env > project config > global default (§2d of architecture.md); `--origin` overrides
+7. **Origin is resolved, never baked in** — env > project config > global default (§2d of architecture.md); `--origin` overrides. The origin reference is `OWNER/REPO[@REF]`; `@REF` is optional and tracks a branch (see [Origin Reference Grammar](#origin-reference-grammar))
 8. **Classify against a pattern before merging** — see [Pattern Classification](#pattern-classification) and the [pattern-gate checklist](checklist-template.md)
 9. **The CLI is consume-only** — no `publish`, no `login`, no write credential in the binary (architecture §2b). GitHub is the authority plane.
 10. **Standard flags everywhere** — see [Standard Flags](#standard-flags): `--json` + `--verbose` on every command; mutating commands also take `--dry-run` and refuse to clobber divergent content without `--force`
@@ -229,6 +229,27 @@ A small set of flags carry the same meaning across every command, so an agent ca
 `--force` and the verify-time label-honesty check are two sides of one rule: divergent content is never written or accepted silently. `--force` is the *human's* deliberate override at write time; `verify` is the *gate's* refusal at check time.
 
 ---
+
+## Origin Reference Grammar
+
+The origin reference — the value of `--origin`, `SKILLRIG_ORIGIN`, and the `origin` key in `.skillrig/config.toml` — is `OWNER/REPO[@REF]`. The `@REF` suffix is **optional**: omitted, the origin tracks the library's default branch; supplied, it tracks a specific **branch** (e.g. a staging line of the skills library). Validation is **shape-only and offline** — like the rest of `init`, it never checks that the repo or ref actually exists (that is a future `doctor`/`verify`/`add` concern).
+
+```
+skillrig init --origin my-org/my-skills            # default branch
+skillrig init --origin my-org/my-skills@staging    # track the 'staging' branch
+```
+
+This realizes the `@ref` half of the ecosystem-standard identity grammar `OWNER/REPO[/path]@ref` (architecture R26) that `gh skill` (`gh skill install github/awesome-copilot documentation-writer@v1.2.0`) and Vercel `npx skills` use. The `[/path]` portion remains future work.
+
+**Two meanings of `@ref`, kept distinct.** For an **origin**, `@REF` is a *moving pointer* — a branch you track and re-resolve. For a **skill** vendored via `add` (`skillrig add <skill> --pin <ref>`), the ref is an *immutable* pin — a tag or commit SHA, recorded in the lock so the vendored content is reproducible. Same grammar, opposite intent: the origin says "where to look (and which line of development)"; the pin says "exactly which reviewed bytes." Docs and help text must not conflate them.
+
+### Why a single `@ref` string, not a separate flag
+
+The branch rides *inside* the one origin string rather than in a separate `--branch`/`--ref` flag, and is stored combined in the single `origin` config key (`origin = 'my-org/my-skills@staging'`). Rationale:
+
+- **One key, three consumers (R26).** The same reference is the key for config, `index.json` rows, and (later) allowlist/lock entries. A single canonical string keeps those aligned; splitting owner/repo from ref into parallel fields invites drift and a "what wins if both are set?" ambiguity.
+- **Ecosystem familiarity.** `@ref` matches `gh skill`, `npx skills`, npm (`pkg@version`), and Go modules (`mod@version`) — an agent transfers the form without re-reading `--help`.
+- **No new flag surface.** `--origin` stays the single way to name an origin; the grammar carries the optional precision. (A `#`-separator — git/npm git-dep style — was considered and rejected for weaker ecosystem alignment with the R26 grammar already adopted.)
 
 ## Pattern Classification
 

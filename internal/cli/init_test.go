@@ -116,3 +116,30 @@ func TestInit_NonInteractiveFlagOverridesTTY(t *testing.T) {
 		t.Errorf("--non-interactive must not prompt even on a TTY, stderr: %q", errBuf.String())
 	}
 }
+
+// TestInit_MalformedOriginMessage pins that the user-facing expected-format
+// guidance for a malformed origin is rendered in the CLI layer — config returns
+// a presentation-free *config.InvalidOriginError (Qodo rule 783432). Asserts the
+// three-part what/why/fix at the unit level (quickstart covers it end-to-end).
+func TestInit_MalformedOriginMessage(t *testing.T) {
+	t.Parallel()
+
+	ic, cmd, _, _ := newTestInitCmd(t, false, t.TempDir())
+	ic.origin = "not-a-valid-origin"
+
+	err := ic.run(cmd)
+	if err == nil {
+		t.Fatal("expected usage error for malformed origin")
+	}
+
+	var usageErr *UsageError
+	if !errors.As(err, &usageErr) {
+		t.Fatalf("error %T is not a *UsageError", err)
+	}
+
+	for _, want := range []string{"not-a-valid-origin", "OWNER/REPO", "my-org/my-skills"} {
+		if !strings.Contains(usageErr.Msg, want) {
+			t.Errorf("message %q missing %q (what/why/fix must be rendered in cli)", usageErr.Msg, want)
+		}
+	}
+}

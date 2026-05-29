@@ -224,6 +224,60 @@ func TestQuickstart_BindProjectJSON(t *testing.T) {
 	}
 }
 
+// TestQuickstart_BindWithRef maps to quickstart BindWithRef (amendment
+// 001-origin-ref-support): an origin may carry an optional @REF (a branch) and
+// it is recorded combined in the single `origin` key.
+func TestQuickstart_BindWithRef(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	res := run(t, runOpts{args: []string{"init", "--origin", "my-org/my-skills@staging"}, cwd: cwd})
+
+	if res.exit != 0 {
+		t.Fatalf("exit = %d, want 0 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	lines := nonEmptyLines(res.stdout)
+	if len(lines) > 2 {
+		t.Errorf("stdout has %d lines, want <= 2:\n%s", len(lines), res.stdout)
+	}
+
+	if !strings.Contains(lines[0], "my-org/my-skills@staging") || !strings.Contains(lines[0], "project") {
+		t.Errorf("line 1 = %q, want it to mention bound origin (incl. @staging) + project", lines[0])
+	}
+
+	if !strings.Contains(res.stdout, "→ resolve order:") {
+		t.Errorf("stdout missing resolve-order footer hint:\n%s", res.stdout)
+	}
+
+	got := readFile(t, filepath.Join(cwd, ".skillrig", "config.toml"))
+	if got != "origin = 'my-org/my-skills@staging'\n" {
+		t.Errorf("config.toml = %q, want origin = 'my-org/my-skills@staging'", got)
+	}
+
+	jsonRes := run(t, runOpts{args: []string{"init", "--origin", "my-org/my-skills@staging", "--json"}, cwd: cwd})
+
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(jsonRes.stdout), &obj); err != nil {
+		t.Fatalf("json variant: %v\n%s", err, jsonRes.stdout)
+	}
+
+	// JSON must be structurally complete (Constitution II), not just carry the ref.
+	for _, key := range []string{"ok", "origin", "scope", "configPath", "written"} {
+		if _, ok := obj[key]; !ok {
+			t.Errorf("JSON missing key %q: %v", key, obj)
+		}
+	}
+
+	if obj["origin"] != "my-org/my-skills@staging" {
+		t.Errorf("origin = %v, want my-org/my-skills@staging", obj["origin"])
+	}
+
+	if obj["scope"] != "project" {
+		t.Errorf("scope = %v, want project", obj["scope"])
+	}
+}
+
 func TestQuickstart_IdempotentRebind(t *testing.T) {
 	t.Parallel()
 

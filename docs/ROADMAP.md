@@ -30,7 +30,7 @@ resolver — AP-04 / AP-06) and layers thin commands on top.
 |---|----------------|---------|------------|--------|
 | 001 | **`init` + origin resolution** — `env SKILLRIG_ORIGIN > .skillrig/config.toml > ~/.config/skillrig/config.toml`; `skillrig init [--origin] [--global]` binds an existing origin (never bootstraps) | Environment | — (project skeleton) | 🚧 |
 | 002 | **`skillcore` + `verify`** — git tree-SHA + `skill.toml` manifest parse; offline label-honesty + orphan check; exit codes 0/2/3 | Verification Gate | 001 | ⬜ |
-| 003 | **`search`** — read committed `index.json`, deterministic tag filter, Two-Level Output | Query | 001 | ⬜ |
+| 003 | **`search`** — read origin (branch aware) committed `index.json`, deterministic tag filter, Two-Level Output | Query | 001 | ⬜ |
 | 004 | **`add`** — vendor a skill subtree + write lock entry; `--dry-run`, refuse-clobber-without-`--force` | Vendor Mutation | 002 | ⬜ |
 | 005 | **backing-CLI prereqs** — `[[requires]]` declare + verify (`--eligible`-style readiness, auth-as-distinct-failure R18); mise consumption via per-CLI tagged releases + template-generated `mise.toml` | (extends verify/doctor) | 002 | ⬜ |
 | 006 | **`doctor`** — superset health check (integrity + prereqs + auth) | Environment | 002, 005 | ⬜ |
@@ -38,6 +38,7 @@ resolver — AP-04 / AP-06) and layers thin commands on top.
 | 008 | **`global add` / `global verify`** — fetch/restore user-scope skills against the global lock | Global Management | 002 | ⬜ |
 | 009 | **multi-client materialization** — canonical `.agents/skills` + symlink views, copy-fallback (Windows/CI) | (supports add/global) | 004 | ⬜ |
 | 010 | **`lint`** — author-side conformance gate, required PR check on the origin | Verification Gate | 002 | ⬜ |
+| 011 | **`aws`** — support AWS AgentRegistry hosted skills | Evolution | 002 | ⬜ |
 
 **Cross-cutting v0 commitments** (architecture §13):
 - Two scopes only — project (vendored, verify-only) + global (fetch/restore). **No "shared" middle tier.**

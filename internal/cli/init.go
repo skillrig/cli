@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,10 +15,19 @@ import (
 
 // originPromptLabel is the single interactive prompt (research D5: one stdlib
 // bufio read on stderr, no retry loop).
-const originPromptLabel = "Origin (OWNER/REPO): "
+const originPromptLabel = "Origin (OWNER/REPO[@REF]): "
 
 // missingOriginFix is the shared fix line for the no-origin error paths.
-const missingOriginFix = "fix: pass --origin OWNER/REPO (e.g. --origin my-org/my-skills) or set SKILLRIG_ORIGIN"
+const missingOriginFix = "fix: pass --origin OWNER/REPO[@REF] (e.g. --origin my-org/my-skills or --origin my-org/my-skills@main) or set SKILLRIG_ORIGIN"
+
+// invalidOriginMsg renders the three-part what/why/fix usage message for a
+// malformed origin. Presentation lives here in internal/cli, not in
+// internal/config, which returns a typed *config.InvalidOriginError (the
+// presentation-free boundary — see config.ParseOrigin).
+func invalidOriginMsg(value string) string {
+	return fmt.Sprintf("invalid origin %q\nwhy: expected OWNER/REPO[@REF]\n"+
+		"fix: pass --origin OWNER/REPO[@REF] (e.g. --origin my-org/my-skills or --origin my-org/my-skills@main)", value)
+}
 
 // initCmd holds the init command's flags and its injectable seams. Production
 // uses the os-backed defaults; tests inject deterministic stubs (interactivity,
@@ -52,11 +62,15 @@ func newInitCmd(opts *globalOpts) *cobra.Command {
 		Short: "Bind this repo (or your global default) to an origin",
 		Long: "Bind a repository — or your per-user global default — to an existing origin,\n" +
 			"the OWNER/REPO that hosts your team's agent skills, by recording it in config.\n" +
+			"Append @REF to track a specific branch (e.g. my-org/my-skills@staging); omit it\n" +
+			"to track the origin's default branch.\n" +
 			"init is idempotent and consume-only: it does not create or scaffold an origin.\n\n" +
 			"Without --origin, init prompts on an interactive terminal; with --non-interactive\n" +
 			"(or no TTY) it fails fast instead of prompting, so scripts and agents never block.",
 		Example: "  # Bind the current repo to an existing origin\n" +
 			"  skillrig init --origin my-org/my-skills\n\n" +
+			"  # Track a specific branch of the origin\n" +
+			"  skillrig init --origin my-org/my-skills@staging\n\n" +
 			"  # Set your personal default origin (used when a repo has none)\n" +
 			"  skillrig init --origin my-org/my-skills --global",
 		Args: cobra.NoArgs,
@@ -65,7 +79,7 @@ func newInitCmd(opts *globalOpts) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&ic.origin, "origin", "", "origin to bind, OWNER/REPO (prompted if omitted on a TTY)")
+	cmd.Flags().StringVar(&ic.origin, "origin", "", "origin to bind, OWNER/REPO[@REF] where @REF tracks a branch (prompted if omitted on a TTY)")
 	cmd.Flags().BoolVar(&ic.global, "global", false, "write the per-user global default instead of the repo config")
 	cmd.Flags().BoolVar(&ic.nonInteractive, "non-interactive", false, "never prompt; fail fast if --origin is missing")
 
@@ -90,6 +104,11 @@ func (ic *initCmd) run(cmd *cobra.Command) error {
 
 	origin, err := config.ParseOrigin(raw)
 	if err != nil {
+		var invalid *config.InvalidOriginError
+		if errors.As(err, &invalid) {
+			return &UsageError{Msg: invalidOriginMsg(invalid.Value), Cause: err}
+		}
+
 		return &UsageError{Msg: err.Error(), Cause: err}
 	}
 
