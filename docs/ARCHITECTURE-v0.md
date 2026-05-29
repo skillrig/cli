@@ -57,12 +57,12 @@ The generic `skillrig` binary is a single static build (goreleaser, cross-OS/arc
 |---|---|---|
 | `skillrig search [--tag ...]` | Query `index.json` for skills | human, agent |
 | `skillrig add <skill>` | Vendor a skill into this repo + write lock entry | human |
-| `skillrig verify` | Offline: integrity + prereqs, exit code | **CI**, agent, human |
+| `skillrig verify` | Offline: integrity only (label-honesty + orphan), exit code | **CI**, agent, human |
 | `skillrig bump --pr` | Detect upstream advance, open upgrade PR | **CI (cron)** |
 | `skillrig global add/verify <skill>` | Manage global-scope skills | human |
 | `skillrig doctor` | Superset health check (integrity + prereqs + auth) | human, agent |
 
-`verify` and `doctor` overlap deliberately: `verify` is the lean, scriptable CI gate (R11); `doctor` is the human-friendly superset that also checks prerequisite auth (R18) and global hints.
+`verify` and `doctor` divide along **what the caller needs**, not just verbosity (clarified 2026-05-29). `verify` is the lean, scriptable **integrity** gate — label-honesty (tree-SHA) + orphan (on-disk = locked) — run by **CI**, which validates *content* and therefore needs **no backing binaries** on the runner. `doctor` is the human/agent **eligibility + health** superset that additionally checks each `[[requires]]` prerequisite (present + version, PATH-or-mise-resolvable) and prerequisite **auth** (R18) — the things an agent needs to actually *run* a skill at runtime. The earlier "`verify` also checks prereqs (fail in CI / warn for humans)" framing was **rejected**: it conflated "non-interactive" with "CI", when the caller that actually needs prerequisites present is the runtime agent, not the content-validating CI gate. So **prerequisite / eligibility checking lives in `doctor` (and in `bump` when re-vendoring), never in `verify`** (resolves open Q5). `verify` emits exit `0/1/2`; the prerequisite class (exit `3`) is emitted by `doctor`.
 
 **Critical design rule:** `verify`, `bump`, and `doctor` all call the *same* `internal/skillcore` functions for hashing and manifest parsing. There must be exactly one implementation of "compute a skill's tree SHA" so the value CI writes during `bump` is identical to the value `verify` recomputes (R9, R14, N2). Make this a hard internal boundary. *(This thin-interface-over-shared-core rule is independently validated by Skilldex, whose MCP server and CLI both dispatch to the same `core/` functions "so the two interfaces cannot diverge." If you later expose an MCP surface for agents, it dispatches to `skillcore` too — never a parallel implementation.)*
 
@@ -278,7 +278,7 @@ A skill's required CLI is one of two kinds, and skillrig handles both:
 
 Mechanics:
 - **Declare:** `[[requires]]` in `skill.toml` (§4.1), vendored so checks run offline (R16). A `source` of the org's own origin signals a private, co-located CLI; an external source signals a public one.
-- **Verify:** `skillrig verify`/`doctor` checks each `requires` entry — on PATH (or resolvable via mise)? version satisfies constraint? — deterministic pass/fail with exit code (R11, R17).
+- **Check (doctor, not verify):** `skillrig doctor` checks each `requires` entry — on PATH (or resolvable via mise)? version satisfies constraint? — deterministic pass/fail with exit code (R11, R17). A `mise.toml` in the consumer repo is a **suggestion, not a requirement**: skillrig works without it and simply reports the binary missing from PATH; when a `mise.toml` *is* present, "resolvable via mise" counts as satisfied. This is **doctor's** job, not `verify`'s — `verify` validates vendored *content* (label-honesty + orphan) and needs no backing binaries; prerequisite/eligibility is what the *runtime agent* needs (clarified 2026-05-29, §2).
 - **Auth as a distinct failure (R18):** for private-repo tools (mise gh backend pulling from the origin or e.g. `cdktn-io/oxid`), `doctor` must distinguish "tool missing" from "tool exists but you can't authenticate to fetch it" — explicitly check `gh auth` / `GITHUB_TOKEN` reachability and report it as its own actionable error. The most common onboarding/CI footgun; surface it loudly.
 
 The CLI can *offer* to write the matching `mise.toml` stanza (helpful), but installation is mise's job, not ours. We ship no Nix package or Homebrew tap in v0; orgs wanting those contribute them.
@@ -298,7 +298,7 @@ Verified against mise's GitHub backend docs (current as of early 2026). Three fi
 
 > **Net:** the co-located-monorepo origin is viable through mise, but only via per-CLI tagged releases + per-tool tag filtering, with the template generating the config. The "one big release with all binaries" shape does **not** work with mise today.
 
-> **Reference design (from OpenClaw study):** OpenClaw's `openclaw skills list --eligible` is the closest prior art to `skillrig verify`'s prereq check — it filters to skills *actually runnable in the current environment*, treating "missing dependency or auth error" as the disqualifier. Adopt its shape: a skill is "eligible" iff every `[[requires]]` resolves (present + version satisfies) AND any private source is authenticable (R18). `verify` returns the eligible/ineligible partition with per-skill reasons. Study OpenClaw's dependency-declaration schema before finalizing the `[[requires]]` fields.
+> **Reference design (from OpenClaw study):** OpenClaw's `openclaw skills list --eligible` is the closest prior art to `skillrig verify`'s prereq check — it filters to skills *actually runnable in the current environment*, treating "missing dependency or auth error" as the disqualifier. Adopt its shape: a skill is "eligible" iff every `[[requires]]` resolves (present + version satisfies) AND any private source is authenticable (R18). **`doctor`** (not `verify`) returns the eligible/ineligible partition with per-skill reasons — eligibility is a runtime-agent concern, not the content-integrity gate (§2). Study OpenClaw's dependency-declaration schema before finalizing the `[[requires]]` fields.
 
 ---
 
@@ -383,7 +383,7 @@ Recommendation to pressure-test: **Option B for the core, borrow `gh skill`'s cl
 2. Symlink fallback policy on Windows/CI: copy-mode default detection rules.
 3. `mise.toml` stanza generation: write it, or only print it? (Leaning: offer, don't impose.)
 4. Where exactly the global lock lives across clients (`~/.agents/` canonical vs. per-client) and how `global verify` reconciles multiple client home dirs.
-5. Whether `skillrig verify` should hard-fail or warn on a *prerequisite* miss vs. a *label-honesty* miss (likely: label-honesty mismatch = fail; prereq = fail in CI / warn for humans; unresolved merge conflict markers = fail).
+5. ~~Whether `skillrig verify` should hard-fail or warn on a *prerequisite* miss vs. a *label-honesty* miss~~ — **resolved (2026-05-29)**: `verify` does **no** prerequisite check at all — that belongs to `doctor` (and `bump` when re-vendoring) (§2, §8). `verify` is integrity-only: label-honesty mismatch = fail (exit 2), orphan (on-disk ≠ locked) = fail (exit 2), unresolved conflict markers = fail (exit 2, reserved until `bump` can produce them). The prerequisite class (exit 3) is `doctor`'s. The old "fail in CI / warn for humans" framing was rejected — CI validates content and needs no binaries; the agent needs prerequisites at runtime, so eligibility belongs where the agent asks for it (`doctor`).
 6. **Wrap vs. reimplement `gh skill`** (§11b) — the biggest architectural fork; decide before building §6.
 7. **Provenance store reconciliation** — if wrapping `gh skill`, how to avoid two provenance stores (its frontmatter metadata vs. your lockfile). Likely: lockfile is canonical, frontmatter ignored/stripped.
 8. **Allowlist authoring location** — `allowlist` block inside the `index.json` build inputs vs. a standalone `policy.toml`; and whether the allowlist is global-only or also per-consumer-repo (a repo tightening the org default).
@@ -408,7 +408,7 @@ The smallest thing that delivers the core promise ("the skill your agent runs is
 - Lockfile with `commit` (provenance) + `treeSha` (label honesty) + `requires` (§4.2); `.skillrig/config.toml` (input) + `.skillrig/skills-lock.json` (output) (§2d).
 - Origin discovery via env > project config > global default; origin = git, **no auth of its own** (§2d).
 - One **batteries-included GitHub template** (skills + Go-monorepo backing-CLI pattern + index/lint/release workflows) (§2d).
-- Backing-CLI declare + verify (`[[requires]]`, `--eligible`-style readiness, auth-as-distinct-failure) (§8); mise consumption via **per-CLI tagged releases + template-generated `mise.toml`** (§8b).
+- Backing-CLI declare + **doctor**-side eligibility check (`[[requires]]`, `--eligible`-style readiness, auth-as-distinct-failure) (§8) — *not* in `verify`, which is integrity-only; mise consumption via **per-CLI tagged releases + template-generated `mise.toml`** (§8b).
 - Multi-client materialization: canonical `.agents/skills` + symlink views, copy-fallback (§6).
 - Discovery via committed `index.json` (§9); **deterministic tags ship in the manifest** (data only).
 - Drift-aware **three-way-merge bump** with conflict-markers-and-error (§5b).

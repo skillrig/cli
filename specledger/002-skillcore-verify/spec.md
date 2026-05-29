@@ -1,0 +1,208 @@
+# Feature Specification: Vendor & Verify Skills (`add` + `verify`)
+
+**Feature Branch**: `002-skillcore-verify`
+**Created**: 2026-05-29
+**Status**: Draft
+**Input**: User description: "Implement `skillcore` + `verify` — git tree-SHA + `skill.toml` manifest parse; offline label-honesty + orphan check; exit codes 0/2/3 from docs/ARCHITECTURE-v0.md"
+
+> **Technical companion**: [spec-tech-spike.md](./spec-tech-spike.md) holds the implementation-level decisions (the shared-core primitives, tree-SHA mechanics, lock schema, exit-code mapping, the clarification session that reshaped scope). This spec stays user-facing; the spike is the input to `/specledger.plan`.
+
+## Overview
+
+This feature delivers the product's core promise — **"the skill your agent runs is exactly the version that was reviewed and approved"** — as something a user can do end-to-end, offline:
+
+1. A user **vendors a skill** from their org's library into their repo, recording its exact identity (`add`).
+2. Anyone — CI, an agent, or a human — can later **prove the vendored skills are exactly what was recorded**, and that nothing untracked has slipped in (`verify`).
+
+Both verbs sit on a single shared trust primitive (the content fingerprint), so the value written when a skill is vendored and the value checked at verification time are computed the same way and cannot drift apart. That shared primitive is invisible to users; its user-meaning is simply that **the gate cannot lie**.
+
+This is the second slice of the CLI. The first (`001-init-origin-resolution`) made a repo self-describing about *where* its skills come from; this slice makes the skills it carries *honest*.
+
+## Clarifications
+
+### Session 2026-05-29
+
+- Q: The input lists exit codes 0/2/3, but names only label-honesty + orphan checks (both the integrity/exit-2 class). Exit 3 is the *prerequisite* class. Does this slice check backing-CLI prerequisites? → A: **No.** Prerequisite / eligibility checking (does the agent have the backing CLIs a skill needs to *run*?) belongs to a later `doctor` capability, not to `verify`. `verify` is integrity-only and uses exit statuses `0/1/2`; the prerequisite class (exit 3) is deferred. (`docs/ARCHITECTURE-v0.md` was corrected to reflect this — see the spike §8.)
+- Q: Why not have `verify` warn-or-fail on prerequisites depending on caller? → A: That framing was rejected. The CI gate validates *content* and needs no backing binaries installed; the caller that actually needs prerequisites present is the runtime agent. So prerequisite/eligibility lives where the agent asks for it (`doctor`), and the content gate stays free of it. Practical consequence: a CI run of `verify` never fails because a backing tool is missing.
+- Q: `verify` needs something to verify against, but the lock's writers weren't built yet — fixtures only, or a real producer? → A: A real producer. **`skillrig add` (vendoring from a local copy of the origin) is in scope**, so the `add → verify` round-trip is the acceptance contract and the recorded fingerprint is genuine, not hand-authored. `verify` itself remains read-only.
+- Q: Is vendoring-from-a-local-path a throwaway test affordance or a real capability? → A: A **durable capability** — consuming from a local checkout of the org library is a legitimate, kept use case. Fetching directly from a remote origin is a *later, additive* mode, not a replacement for it.
+
+## User Scenarios & Testing *(mandatory)*
+
+### User Story 1 - Vendor an approved skill into my repo (Priority: P1)
+
+A developer (or an agent acting for them) has access to their org's skill library and wants one of its skills available in this repo. They run a single command naming the skill's location in a local copy of that library. The skill's files are placed into the repo's standard skills location, and its exact identity — which version, where it came from, and a tamper-evident fingerprint of its content — is recorded in a committed record file. The repo now carries both the skill and proof of what it is.
+
+**Why this priority**: Nothing can be verified until something has been vendored and recorded. This is the producer half of the promise and the smallest standalone slice that delivers value: a repo gains an approved skill plus a durable record of its identity. Consuming from a local copy of the library is itself a real, supported workflow (offline, air-gapped, or pre-cloned origins).
+
+**Independent Test**: Point the vendor command at a skill in a local sample library; confirm the skill's files land in the repo's skills location and the record file gains an entry naming the skill's version, source, and content fingerprint. No network is involved.
+
+**Acceptance Scenarios**:
+
+1. **Given** a repo with no vendored skills and a local library containing a skill, **When** the developer vendors that skill, **Then** the skill's files appear under the repo's standard skills location and the record file contains one entry for it (version, source/provenance, and a content fingerprint), and the command reports success.
+2. **Given** a skill already vendored from a library, **When** the developer vendors the identical content again, **Then** the outcome is unchanged (idempotent) and the command reports success — no duplicate or corrupted record.
+3. **Given** the developer requests machine-readable output, **When** the vendor command succeeds, **Then** the tool emits structured output naming the skill, its recorded version, and where it was placed, and that output is complete and parseable.
+4. **Given** a skill is already vendored and the developer has locally changed its files, **When** they vendor again with content that differs from the recorded fingerprint, **Then** the tool refuses to silently overwrite the divergent content and requires an explicit override, so local edits are never lost without intent.
+5. **Given** the developer wants to preview only, **When** they run the vendor command in dry-run mode, **Then** the tool reports what it *would* place and record, and writes nothing.
+
+---
+
+### User Story 2 - Prove a vendored skill is exactly what was approved (Priority: P1)
+
+A reviewer, a CI job, or an agent needs assurance that the skills checked into a repo are exactly the approved versions and have not been altered to claim a version they aren't. They run a single verification command. It recomputes each vendored skill's content fingerprint and compares it to the recorded value. If every skill matches, the command passes. If any skill's content diverges from what its record claims, the command fails and names the offending skill and the discrepancy.
+
+**Why this priority**: This is the core product promise made checkable. It is the reason the feature exists: a long skill file can hide a change no human reviewer would catch by eye, and this turns "is this really the approved version?" into a deterministic pass/fail. It builds on US1 (something must be vendored and recorded first), so the two together form the minimum viable round-trip.
+
+**Independent Test**: With at least one vendored-and-recorded skill, run verify and confirm it passes; then alter a single byte of a vendored skill file and confirm verify fails with a non-zero status that names the skill and reports a content mismatch.
+
+**Acceptance Scenarios**:
+
+1. **Given** a repo whose vendored skills all match their recorded fingerprints, **When** verify runs, **Then** it reports success with a success exit status and a summary of how many skills were verified.
+2. **Given** a vendored skill whose content has been modified so it no longer matches its recorded fingerprint, **When** verify runs, **Then** it exits with the verification-failure status and names the skill plus the recorded-vs-actual discrepancy.
+3. **Given** the verification runs entirely on the committed files with no network or external service, **When** it is run repeatedly with unchanged inputs, **Then** it returns the same result every time (deterministic, offline).
+4. **Given** a repo with no vendored skills and no record file, **When** verify runs, **Then** it reports success (nothing to verify) rather than an error.
+
+---
+
+### User Story 3 - Catch a skill that's untracked or missing (Priority: P2)
+
+A security-conscious reviewer worries about a skill that was added to the repo without going through the record — an untracked skill that could quietly instruct an agent to do something unreviewed — or, conversely, a recorded skill whose files have gone missing. Running verify covers the *whole* set of skills on disk against the recorded set, not only the ones listed, so neither an extra unrecorded skill nor a missing recorded one can pass unnoticed.
+
+**Why this priority**: It closes the highest-severity supply-chain gap the design calls out (an untracked skill is the primary attack vector), and it makes "everything present is accounted for" part of the gate. It depends on the matching machinery from US2, so it follows it.
+
+**Independent Test**: Starting from a passing repo, (a) add a skill directory that has no record entry and confirm verify fails identifying it as untracked; (b) separately, remove a recorded skill's files and confirm verify fails identifying it as missing.
+
+**Acceptance Scenarios**:
+
+1. **Given** a skill directory present in the repo's skills location with no corresponding record entry, **When** verify runs, **Then** it exits with the verification-failure status and identifies the untracked (orphan) skill.
+2. **Given** a record entry for a skill whose files are absent from the repo, **When** verify runs, **Then** it exits with the verification-failure status and identifies the missing skill.
+3. **Given** the repo uses per-client compatibility views (alternate directory entries pointing at the same canonical skill content), **When** verify runs, **Then** those views are not miscounted as separate or untracked skills.
+4. **Given** both a content mismatch (US2) and an untracked skill are present, **When** verify runs, **Then** it fails and reports both classes of problem rather than stopping at the first.
+
+---
+
+### User Story 4 - Branch on the outcome deterministically (Priority: P3)
+
+An automated caller — a CI merge gate or an agent deciding its next step — needs to act on the verification result without parsing prose. It relies on stable exit statuses to branch (proceed vs. block) and on complete machine-readable output to report *which* skills failed and why. When something is wrong, the message states what failed, the real reason, and a concrete fix.
+
+**Why this priority**: It hardens the gate for its primary non-human callers and makes the result composable in pipelines, but the happy and failure paths (US1–US3) must exist first.
+
+**Independent Test**: Trigger each outcome — all-pass, content mismatch, untracked/missing — and confirm each yields its documented exit status and a structurally complete machine-readable verdict; confirm every failure message contains what failed, why, and a suggested fix, and that diagnostics go to the error stream while data goes to standard output.
+
+**Acceptance Scenarios**:
+
+1. **Given** any verification outcome, **When** verify runs, **Then** it returns a stable exit status distinguishing success, verification failure, and usage/config error, consistent across repeated runs.
+2. **Given** machine-readable output is requested, **When** verify runs, **Then** the output is complete (every checked skill with its per-skill verdict) and parseable, for both passing and failing runs.
+3. **Given** a verification failure, **When** the result is reported, **Then** the message names what failed, the underlying reason (never swallowed), and at least one concrete next step; an escape-hatch verbose mode exposes the raw underlying cause.
+4. **Given** the record file is itself unreadable or malformed, **When** verify runs, **Then** it exits with the usage/config error status (distinct from a verification failure) and explains the problem rather than dumping a raw parser error.
+
+---
+
+### Edge Cases
+
+- **No record file at all**: treated as "no skills recorded" — verify passes if there are also no skills on disk, and reports every on-disk skill as untracked if there are. Vendoring creates the record file on first use.
+- **Empty repo / nothing vendored**: verify is a success (nothing to check), not an error.
+- **Local edits then re-vendor**: re-vendoring content that diverges from the recorded fingerprint requires an explicit override; it never silently discards local edits.
+- **Re-vendor identical content**: produces no spurious change and reports success (idempotent).
+- **Per-client view directories**: alternate directory entries that point at the same canonical skill content are not counted as separate or untracked skills.
+- **Malformed record file**: surfaced as a usage/config error with a clear message, distinct from a content-verification failure.
+- **Not inside a version-controlled repo**: the fingerprint relies on the repo's version-control content model, so running outside one is a usage/config error that says so.
+- **Whitespace/formatting in the record**: tolerated on read; the fingerprint comparison is on content, not formatting.
+
+## Requirements *(mandatory)*
+
+### Functional Requirements
+
+**Vendoring a skill (`add`)**
+
+- **FR-001**: The system MUST provide a command that vendors a skill from a local copy of the org's library into the repo's standard skills location and records its identity.
+- **FR-002**: For each vendored skill, the system MUST record its version, its provenance (where it came from), and a content fingerprint that uniquely reflects the skill's content.
+- **FR-003**: The vendor command MUST be idempotent: re-vendoring identical content leaves an equivalent result and reports success without error.
+- **FR-004**: The vendor command MUST NOT silently overwrite vendored content that diverges from the recorded fingerprint; it MUST require an explicit override so local modifications are never lost without intent.
+- **FR-005**: The vendor command MUST support a preview (dry-run) mode that reports the intended placement and record changes without writing anything.
+- **FR-006**: The vendor command MUST create any missing skills location and record file on first use.
+- **FR-007**: The vendor command MUST operate offline against the supplied local source; it MUST NOT require network access in this feature. (Fetching from a remote origin is a later, additive mode — see Out of Scope.)
+
+**Verifying vendored skills (`verify`)**
+
+- **FR-008**: The system MUST provide a verification command that checks the repo's vendored skills against their recorded identities, entirely offline and deterministically (same inputs always yield the same result; no network or external/live signal).
+- **FR-009**: Verification MUST recompute each recorded skill's content fingerprint from its current on-disk content and compare it to the recorded value, failing when they differ (label honesty).
+- **FR-010**: Verification MUST compare the set of skills present on disk against the set of recorded skills, failing when a skill is present but unrecorded (untracked/orphan) or recorded but absent (missing) — covering the whole set, not only recorded entries.
+- **FR-011**: Verification MUST NOT count per-client compatibility views (alternate directory entries pointing at the same canonical skill content) as separate or untracked skills.
+- **FR-012**: Verification MUST report *all* detected problems in a run (e.g. both a content mismatch and an untracked skill), not stop at the first.
+- **FR-013**: Verification MUST treat an empty repo / absent record as success (nothing to verify), and MUST treat an unreadable or malformed record as a usage/config error distinct from a verification failure.
+- **FR-014**: Verification MUST NOT perform any backing-tool prerequisite or eligibility check; that is explicitly out of scope for this feature (reserved for a later health command). A missing backing tool MUST NOT cause a verification failure.
+- **FR-015**: Verification MUST be read-only — it checks, and never writes, the record or the skill files.
+
+**Shared trust primitive (`skillcore`)**
+
+- **FR-016**: The content fingerprint and the skill-record parsing MUST have exactly one shared implementation used by both vendoring and verification, so the value written at vendor time and the value checked at verify time cannot diverge. (No parallel/duplicate implementation.)
+- **FR-017**: That shared implementation MUST be reusable by future commands (e.g. upgrade-proposing and health commands) without copying the logic.
+
+**Command experience (baseline conformance, consistent with the first slice)**
+
+- **FR-018**: Every command MUST provide self-documenting help including at least two usage examples sufficient to construct a correct invocation without external docs.
+- **FR-019**: Every error MUST state (a) what failed, (b) the real underlying reason (never swallowed), and (c) at least one concrete suggested fix; a verbose mode MUST expose the raw underlying cause.
+- **FR-020**: Diagnostic output MUST go to the error stream and primary data to the standard output stream, so output can be cleanly piped.
+- **FR-021**: The system MUST offer a machine-readable output mode whose output is complete (every checked skill with a per-skill verdict; no truncation) and parseable, for both passing and failing runs.
+- **FR-022**: The system MUST use distinct, stable exit statuses: success; usage/config error (bad arguments, malformed record, not in a version-controlled repo); and verification failure (content mismatch or untracked/missing skill). The prerequisite-failure status is reserved and MUST NOT be emitted by this feature's commands.
+
+### Key Entities *(include if feature involves data)*
+
+- **Skill**: a unit of agent capability — a directory of files (including a machine-readable manifest declaring its name, version, and any backing-tool prerequisites) vendored into the repo. The thing that is vendored, recorded, and verified.
+- **Skill manifest**: the per-skill machine-readable description (name, version, namespace, description, discovery tags, declared backing-tool prerequisites). Read at vendor time; its prerequisite declarations are recorded but not evaluated in this feature.
+- **Skill record (lock)**: the committed file mapping each vendored skill to its recorded version, provenance, content fingerprint, and location. Written by vendoring, read by verification; the source of truth for "what was approved."
+- **Content fingerprint**: a value that uniquely reflects a skill's content as published for a given version. Used for *label honesty* — confirming on-disk content matches the version it claims to be. Computed identically at vendor time and verify time.
+- **Verification verdict**: the outcome of verification — overall pass/fail plus a per-skill result (matched / content-mismatch / untracked / missing), surfaced both compactly for humans and completely for machines.
+
+## Out of Scope
+
+The following are explicitly **not** part of this feature and MUST NOT be pulled in:
+
+- **Backing-tool prerequisite / eligibility checking** (is a skill's required CLI present, the right version, authenticable) and its dedicated exit status — reserved for a later health command. `verify` here is integrity-only.
+- **Fetching skills from a remote origin** (network/git fetch), origin-resolution-driven vendoring, and immutable version pins — this feature vendors from a *local* copy of the library only.
+- **Upgrade proposal** (detecting upstream advances, three-way-merge of local edits, conflict-marker handling, opening PRs) — a later command; this feature has no producer of merge conflicts.
+- **Discovery** (`index.json`, search) and any browse UI.
+- **Multi-client materialization** (creating per-client view directories) — verification must merely not miscount existing views; creating them is out of scope.
+- **External-source allowlists, audit classification, and risk/vulnerability surfacing** — later governance work.
+- **Any authentication or credential handling.**
+
+## Success Criteria *(mandatory)*
+
+### Measurable Outcomes
+
+- **SC-001**: A user can vendor a skill from a local library and verify it in two commands, with zero network access and no hand-authored records.
+- **SC-002**: When a vendored skill's content matches its record, verification passes (success status); when any skill's content diverges from its record, verification fails with the verification-failure status — correct for 100% of label-honesty cases.
+- **SC-003**: A single altered byte in any vendored skill file is detected as a content mismatch — 0 false negatives.
+- **SC-004**: Any on-disk skill with no record entry (untracked) and any recorded skill absent on disk (missing) are both detected and fail the gate.
+- **SC-005**: The content fingerprint computed at verify time is identical to the value recorded at vendor time for unmodified content — verified by vendoring real content and re-checking it, never by a hand-written value.
+- **SC-006**: A missing backing tool never causes a verification failure (verification is integrity-only).
+- **SC-007**: Verification is fully offline and deterministic: identical inputs yield the identical exit status and verdict on every run.
+- **SC-008**: Every failure a user can hit (content mismatch, untracked/missing skill, malformed record) produces a message naming the problem and at least one concrete next step — 0 raw-only errors — and machine-readable output is complete and parseable for both passing and failing runs.
+- **SC-009**: Each command's help output alone is sufficient for a first-time user or agent to construct a correct invocation (purpose plus ≥2 examples).
+
+## Constitution Alignment *(skillrig-specific)*
+
+- **II — Quickstart-as-Contract**: `quickstart.md` scenarios will be authored as executable steps (concrete invocations, observable record/skill contents, exit statuses) mapping 1:1 to integration tests. The vendor→verify round-trip, the tamper→fail case, and the untracked/missing cases are each a scenario. Output-shape assertions are required: machine-readable output parseable and structurally complete; error output checked for its three parts (what/why/fix) plus the correct exit status — not a single substring match.
+- **III — Ground-Truth Anchoring**: the content fingerprint must be anchored to real captured content — vendored from a real local library fixture and recomputed — never an invented or hand-written fingerprint. (See spike §7.)
+- **VIII — Single-Implementation Discipline (AP-04)**: the fingerprint and record-parsing primitives have exactly one implementation, shared by vendoring and verification and reusable by later commands; a parallel copy is a defect.
+- **IX — Skill–CLI Co-Evolution**: this capability ships with a corresponding agent skill update teaching agents how to phrase "vendor this skill / check our skills are unmodified," how to read the pass/fail outcome, and that a missing backing tool is *not* a verification failure (it is a later health concern).
+
+## Dependencies & Assumptions
+
+**Assumptions**:
+
+- A local copy of the org's skill library is available on disk to vendor from; this feature does not fetch it. (Consuming from a local checkout is a supported, durable workflow; remote fetch is additive future work.)
+- Skills are vendored into the repo under version control, so the repo's own content model carries file integrity; the recorded fingerprint adds *label honesty* (content matches its claimed version) on top of that.
+- The skill record file and the per-skill manifest are separate concerns from the origin config of the first slice; this feature reads/writes the record and reads the manifest, and does not require an origin to be configured.
+
+**Dependencies**:
+
+- Builds on the first slice (`001-init-origin-resolution`) for the baseline command experience (help, errors-as-navigation, two-level output, exit-code discipline) and the project's config/skills directory conventions.
+- Conventions are governed by `docs/design/cli.md` (Verification Gate and Vendor Mutation command patterns, Exit Codes) and `docs/ARCHITECTURE-v0.md` (§2, §4, §8, §9b), which were updated this branch to attribute prerequisite checking to the later health command rather than to verification. The detailed technical decisions live in [spec-tech-spike.md](./spec-tech-spike.md).
+
+### Previous work
+
+### Epic: 001-init-origin-resolution - CLI Initialization & Origin Resolution (closed)
+
+- **Origin resolution + `skillrig init`**: established the single origin resolver and the baseline command experience (help, errors-as-navigation, two-level output, exit codes 0/1) that this feature extends with the verification-failure class (exit 2). This is the first feature to exercise integrity verification; no prior `add`/`verify`/`skillcore` work exists (`sl issue list --all` shows only closed `001` items).

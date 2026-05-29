@@ -64,3 +64,14 @@ Scripts and agents branch on them, so meanings are fixed (`internal/cli/exit.go`
 Features follow SpecLedger: **Specify → Clarify → Plan → Tasks → Review → Implement**, with artifacts under `specledger/<NNN-feature>/` (spec, plan, tasks, quickstart, contracts, data-model). Quickstart scenarios are the acceptance contract (each maps to a `TestQuickstart_<scenario>` integration test) and are written during planning.
 
 **Read `AGENTS.md` before tracking work or committing.** It defines the two repo-specific operating rules this project enforces: (1) all work-item tracking goes through the built-in `sl issue` CLI (issues stored per-spec in `specledger/<spec>/issues.jsonl`) — **never** ad-hoc markdown TODO lists; and (2) the commit/PR conventions (conventional prefixes, imperative ≤72-char subjects, testing evidence in PRs). It exists so task tracking and history stay in one git-friendly system rather than fragmenting across tools — consult it for the exact commands and the precise scope of each rule.
+
+<!-- >>> specledger-generated -->
+<!-- Auto-managed by specledger - do not edit this section -->
+## Active Technologies
+
+- Go 1.24+ (toolchain in this environment is 1.24.4; 1.25 also fine) — single static binary; cross-OS/arch via goreleaser later, out of scope here
+- Go standard `go test`. Two tiers — (a) in-process Cobra unit tests via `SetArgs`/`SetOut`/`SetErr` + table-driven resolver tests; (b) `TestQuickstart_*` integration tests that build and exec the real binary (Constitution II/III).
+- Local files only — project `.skillrig/config.toml`, global `~/.config/skillrig/config.toml` (XDG-aware). No database, no network.
+- `github.com/spf13/cobra` (command tree); `github.com/pelletier/go-toml/v2` (config read/write — see research.md). Dependencies kept minimal (consume-only
+- static binary).
+<!-- <<< specledger-generated -->
