@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -68,12 +69,20 @@ func TestParseOriginErrorEchoesValue(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for malformed origin")
 	}
-	// FR-012: error names the expected format and echoes the offending value.
-	msg := err.Error()
-	for _, want := range []string{"not-valid", "OWNER/REPO"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("error %q missing %q", msg, want)
-		}
+	// FR-012: config returns a typed *InvalidOriginError carrying the offending
+	// value (presentation-free); internal/cli renders the expected-format
+	// guidance. Pin the type + the echoed value here.
+	var invalid *InvalidOriginError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("error %T is not a *InvalidOriginError", err)
+	}
+
+	if invalid.Value != "not-valid" {
+		t.Errorf("InvalidOriginError.Value = %q, want %q", invalid.Value, "not-valid")
+	}
+
+	if !strings.Contains(err.Error(), "not-valid") {
+		t.Errorf("error %q should echo the offending value", err.Error())
 	}
 }
 

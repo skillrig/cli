@@ -25,10 +25,17 @@ var originPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
 // of scope.
 var refPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 
-// originErrFmt is the shared usage-error format for a malformed origin. It names
-// the expected shape (including the optional ref) and echoes the offending value
-// (FR-012 / amendment FR-018).
-const originErrFmt = "invalid origin %q: expected OWNER/REPO[@REF] (e.g. my-org/my-skills or my-org/my-skills@main)"
+// InvalidOriginError marks a value that fails the OWNER/REPO[@REF] shape check.
+// It carries only the offending value so internal/config stays presentation-free:
+// the user-facing "expected …, e.g. …" guidance is rendered by internal/cli
+// (FR-012 / amendment FR-018). Callers match it with errors.As.
+type InvalidOriginError struct {
+	Value string
+}
+
+func (e *InvalidOriginError) Error() string {
+	return fmt.Sprintf("invalid origin %q", e.Value)
+}
 
 // Origin is an org's skill source in OWNER/REPO[@REF] form. It is the single
 // value this feature reads, validates, records, and resolves. Ref is optional:
@@ -61,19 +68,20 @@ func (o Origin) String() string {
 // OWNER/REPO[@REF] shape. The optional ref is split on the first '@' (the
 // owner/repo charset excludes '@', so the split is unambiguous) and validated
 // against refPattern; a trailing '@' with no ref is rejected. On failure it
-// returns a usage error that names the expected format and echoes the offending
-// value (FR-012). A blank string is rejected; callers that treat blank as
-// "unset" (e.g. SKILLRIG_ORIGIN) must check before calling.
+// returns a typed *InvalidOriginError carrying the offending value; the
+// user-facing expected-format guidance is rendered by internal/cli (FR-012). A
+// blank string is rejected; callers that treat blank as "unset" (e.g.
+// SKILLRIG_ORIGIN) must check before calling.
 func ParseOrigin(s string) (Origin, error) {
 	trimmed := strings.TrimSpace(s)
 
 	ownerRepo, ref, hasRef := strings.Cut(trimmed, "@")
 	if !originPattern.MatchString(ownerRepo) {
-		return Origin{}, fmt.Errorf(originErrFmt, s)
+		return Origin{}, &InvalidOriginError{Value: s}
 	}
 
 	if hasRef && !refPattern.MatchString(ref) {
-		return Origin{}, fmt.Errorf(originErrFmt, s)
+		return Origin{}, &InvalidOriginError{Value: s}
 	}
 
 	owner, repo, _ := strings.Cut(ownerRepo, "/")

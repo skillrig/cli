@@ -40,7 +40,7 @@ Examples:
 
 1. Resolve write target: `--global` → global config path; else the **git repo root** via `git rev-parse --show-toplevel` (offline) → `<repo-root>/.skillrig/config.toml`; if not inside a git repo, fall back to `./.skillrig/config.toml` in cwd (create `.skillrig/` if missing — FR-010).
 2. Determine origin: `--origin` value; else if `--non-interactive` is set → usage error without prompting (FR-006c); else if interactive TTY → prompt once on stderr; else (no TTY) usage error (FR-006a).
-3. `ParseOrigin` → splits the optional `@REF` and validates both parts shape-only/offline; on invalid shape, usage error, no write (FR-012 / FR-018, FR-019). A valid `@REF` is carried on the resolved origin and stored combined in the `origin` key (FR-020).
+3. `ParseOrigin` → splits the optional `@REF` and validates both parts shape-only/offline; on invalid shape it returns a typed `*config.InvalidOriginError` (presentation-free) which the CLI renders as the user-facing what/why/fix, no write (FR-012 / FR-018, FR-019). A valid `@REF` is carried on the resolved origin and stored combined in the `origin` key (FR-020).
 4. Load existing config at target (if any). Compare:
    - none present → write, `written=true`.
    - equal origin → no-op, `written=false` (idempotent, FR-008).

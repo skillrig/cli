@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,15 @@ const originPromptLabel = "Origin (OWNER/REPO[@REF]): "
 
 // missingOriginFix is the shared fix line for the no-origin error paths.
 const missingOriginFix = "fix: pass --origin OWNER/REPO[@REF] (e.g. --origin my-org/my-skills or --origin my-org/my-skills@main) or set SKILLRIG_ORIGIN"
+
+// invalidOriginMsg renders the three-part what/why/fix usage message for a
+// malformed origin. Presentation lives here in internal/cli, not in
+// internal/config, which returns a typed *config.InvalidOriginError (the
+// presentation-free boundary — see config.ParseOrigin).
+func invalidOriginMsg(value string) string {
+	return fmt.Sprintf("invalid origin %q\nwhy: expected OWNER/REPO[@REF]\n"+
+		"fix: pass --origin OWNER/REPO[@REF] (e.g. --origin my-org/my-skills or --origin my-org/my-skills@main)", value)
+}
 
 // initCmd holds the init command's flags and its injectable seams. Production
 // uses the os-backed defaults; tests inject deterministic stubs (interactivity,
@@ -94,6 +104,11 @@ func (ic *initCmd) run(cmd *cobra.Command) error {
 
 	origin, err := config.ParseOrigin(raw)
 	if err != nil {
+		var invalid *config.InvalidOriginError
+		if errors.As(err, &invalid) {
+			return &UsageError{Msg: invalidOriginMsg(invalid.Value), Cause: err}
+		}
+
 		return &UsageError{Msg: err.Error(), Cause: err}
 	}
 

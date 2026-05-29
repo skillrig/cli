@@ -13,7 +13,7 @@ The org's skill source, in `OWNER/REPO[@REF]` form. The single value this featur
 | `Repo`  | string | non-empty, charset `[A-Za-z0-9._-]` |
 | `Ref`   | string | **optional** (amendment [001-origin-ref-support](amendments/001-origin-ref-support.md)); charset `[A-Za-z0-9._/-]`; empty = default branch |
 
-- Constructed via `ParseOrigin(s string) (Origin, error)`: trims whitespace, splits on the first `@` into `OWNER/REPO` and `REF`, matches `OWNER/REPO` against `^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$` and (when present) `REF` against `^[A-Za-z0-9._/-]+$`. On failure returns a usage error naming the expected `OWNER/REPO[@REF]` format and echoing the offending value (FR-012 / FR-018).
+- Constructed via `ParseOrigin(s string) (Origin, error)`: trims whitespace, splits on the first `@` into `OWNER/REPO` and `REF`, matches `OWNER/REPO` against `^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$` and (when present) `REF` against `^[A-Za-z0-9._/-]+$`. On failure returns a typed `*InvalidOriginError` carrying the offending value (presentation-free); `internal/cli` renders the expected-`OWNER/REPO[@REF]` what/why/fix guidance (FR-012 / FR-018).
 - `String()` renders `Owner/Repo`, appending `@Ref` when a ref is set.
 
 ### ProjectConfig  → `.skillrig/config.toml` (committed, hand-editable INPUT)

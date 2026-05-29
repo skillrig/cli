@@ -41,7 +41,7 @@ Amends [data-model.md](../data-model.md) → *Entities* → **Origin**:
 | `Repo`  | string | non-empty, charset `[A-Za-z0-9._-]` |
 | `Ref`   | string | **optional**; when present, charset `[A-Za-z0-9._/-]` (owner/repo charset plus `/` for branch names like `feature/x`). Empty = default branch. |
 
-- `ParseOrigin(s)` now: trims whitespace; splits on the first `@` into `OWNER/REPO` and `REF`; matches `OWNER/REPO` against `^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$` and, when an `@` was present, `REF` against `^[A-Za-z0-9._/-]+$`; returns the usage error `invalid origin %q: expected OWNER/REPO[@REF] (e.g. my-org/my-skills or my-org/my-skills@main)` on failure (FR-012/FR-018).
+- `ParseOrigin(s)` now: trims whitespace; splits on the first `@` into `OWNER/REPO` and `REF`; matches `OWNER/REPO` against `^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$` and, when an `@` was present, `REF` against `^[A-Za-z0-9._/-]+$`; on failure returns a typed `*InvalidOriginError` carrying the offending value. Per the presentation-free `internal/config` rule (CLAUDE.md; Qodo rule 783432), `internal/cli` renders the user-facing `OWNER/REPO[@REF]` what/why/fix message (e.g. `--origin my-org/my-skills` or `--origin my-org/my-skills@main`) (FR-012/FR-018).
 - `String()` renders `Owner/Repo`, appending `@Ref` only when `Ref != ""`. The zero Origin still renders `""` (SourceNone sentinel — unchanged).
 - **Storage is unchanged structurally**: `Config{ Origin string }` and the single `origin` TOML key. A ref'd origin serializes as `origin = 'my-org/my-skills@staging'`.
 
