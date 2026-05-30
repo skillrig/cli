@@ -3,6 +3,7 @@ package skillcore
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // VerifyFailure is returned by Verify when at least one verdict is not ok. It
@@ -90,4 +91,158 @@ type GitError struct {
 
 func (e *GitError) Error() string {
 	return fmt.Sprintf("git failed (exit %d): %s", e.ExitCode, e.Stderr)
+}
+
+// AuthError is returned when a remote fetch fails authentication against the
+// origin — git reported "Authentication failed" or "Invalid username or token".
+// It is distinct from *NotFoundError (which GitHub returns for a private repo
+// when NO token was resolved): an AuthError means a credential WAS presented but
+// rejected. Origin is the OWNER/REPO[@REF] reference being reached.
+// Presentation-free: the CLI renders the what/why/fix prose. Cause carries the
+// raw *GitError, surfaced under --verbose.
+type AuthError struct {
+	Origin string
+	Cause  error
+}
+
+func (e *AuthError) Error() string {
+	return fmt.Sprintf("authentication failed reaching %q", e.Origin)
+}
+
+func (e *AuthError) Unwrap() error {
+	return e.Cause
+}
+
+// UnreachableError is returned when a remote fetch cannot reach the origin host
+// — git reported "Could not resolve host" or "Failed to connect". It signals a
+// network/connectivity problem (or a misspelled origin), as opposed to an
+// auth/permission or missing-repo failure. Origin is the OWNER/REPO[@REF]
+// reference. Presentation-free; Cause carries the raw *GitError for --verbose.
+type UnreachableError struct {
+	Origin string
+	Cause  error
+}
+
+func (e *UnreachableError) Error() string {
+	return fmt.Sprintf("could not reach %q", e.Origin)
+}
+
+func (e *UnreachableError) Unwrap() error {
+	return e.Cause
+}
+
+// NotFoundError is returned when the origin repository (or a requested skill
+// subtree within it) does not exist — git reported "repository not found". It is
+// deliberately distinct from *SkillNotFoundError (the local-path origin IS
+// checked out but lacks the skill) and from *NoSuchVersionError (the skill
+// exists but the pinned version does not). The GitHub subtlety: a private repo
+// reached without a resolved token also reports "not found", so Authenticated
+// records whether a token was presented — the CLI adds an "if private,
+// authenticate" hint when it was not. Presentation-free; Cause carries the raw
+// *GitError for --verbose.
+type NotFoundError struct {
+	Origin        string
+	Skill         string
+	Authenticated bool
+	Cause         error
+}
+
+func (e *NotFoundError) Error() string {
+	if e.Skill != "" {
+		return fmt.Sprintf("%q not found in %q", e.Skill, e.Origin)
+	}
+
+	return fmt.Sprintf("%q not found", e.Origin)
+}
+
+func (e *NotFoundError) Unwrap() error {
+	return e.Cause
+}
+
+// NoSuchVersionError is returned when a --pin reference resolves to no existing
+// tag or commit in the origin — the skill exists, but the requested version does
+// not. It is a distinct type (not *NotFoundError) so callers/CI can branch on a
+// bad pin versus a missing skill rather than on prose (C2). Ref is the
+// unresolved pin as the user supplied it. Presentation-free; Cause carries the
+// raw *GitError for --verbose.
+type NoSuchVersionError struct {
+	Skill string
+	Ref   string
+	Cause error
+}
+
+func (e *NoSuchVersionError) Error() string {
+	return fmt.Sprintf("%q has no version %q", e.Skill, e.Ref)
+}
+
+func (e *NoSuchVersionError) Unwrap() error {
+	return e.Cause
+}
+
+// IncompatibleConventionError is returned when the origin's catalog declares a
+// skillrigConvention this binary does not support. The gate is exact-match (C1):
+// only convention 1 is accepted, so any other value — a higher version, a lower
+// version, or an absent/zero field — is incompatible. Found is the value read
+// from the origin; Supported is the single version this tool implements.
+// Presentation-free: the CLI renders the upgrade/mismatch guidance.
+type IncompatibleConventionError struct {
+	Found     int
+	Supported int
+}
+
+func (e *IncompatibleConventionError) Error() string {
+	return fmt.Sprintf(
+		"origin uses convention v%d (this tool supports exactly v%d)",
+		e.Found,
+		e.Supported,
+	)
+}
+
+// ClassifyGitError maps a raw *GitError from a remote fetch onto a typed,
+// renderable failure by matching its captured stderr. The three network classes
+// are the only ones classified here; an unrecognized stderr returns the original
+// *GitError unchanged (the CLI surfaces it raw under --verbose). Classification
+// lives in skillcore (the fetch layer), never in internal/cli — the prose
+// what/why/fix is the CLI's job, the failure CLASS is skillcore's. The returned
+// typed errors wrap err so --verbose can still reach the raw git output.
+func ClassifyGitError(err *GitError) error {
+	if err == nil {
+		return nil
+	}
+
+	stderr := err.Stderr
+
+	switch {
+	case containsAny(stderr, "Authentication failed", "Invalid username or token"):
+		return &AuthError{Cause: err}
+	case containsAny(stderr, "Could not resolve host", "Failed to connect"):
+		return &UnreachableError{Cause: err}
+	case isRepoNotFound(stderr):
+		return &NotFoundError{Cause: err}
+	default:
+		return err
+	}
+}
+
+// isRepoNotFound reports whether git stderr signals a missing repository. git
+// emits the URL between "repository" and "not found"
+// (e.g. `repository 'https://…/' not found`) and a separate, capitalized
+// "Remote: Repository not found." line — so a literal "repository not found"
+// substring matches neither. Match the lowercased text on both anchors instead.
+func isRepoNotFound(stderr string) bool {
+	lower := strings.ToLower(stderr)
+
+	return strings.Contains(lower, "repository") &&
+		strings.Contains(lower, "not found")
+}
+
+// containsAny reports whether s contains any of the given substrings.
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+
+	return false
 }

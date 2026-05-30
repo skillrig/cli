@@ -111,23 +111,23 @@ func TestAdd_Idempotent(t *testing.T) {
 	}
 }
 
-// TestAdd_IdempotentWhenManifestNameDiffersFromDir guards R2-H1: the lock is
-// keyed by the manifest name, so the placement guard must look up the recorded
-// fingerprint by that name too — not by the directory arg. data-model only says
-// the leaf SHOULD equal the name, so a dir "tf-review" with manifest name
-// "terraform-plan-review" is legal; before the fix an identical re-add was
-// wrongly refused with an *OverwriteError (FR-003 violation).
-func TestAdd_IdempotentWhenManifestNameDiffersFromDir(t *testing.T) {
+// TestAdd_IdempotentByManifestName guards R2-H1: the lock is keyed by the
+// manifest name, so the placement guard must look up the recorded fingerprint by
+// that name; an identical re-add is idempotent (ActionUnchanged), not wrongly
+// refused with an *OverwriteError (FR-003). Post-manifest-migration the parse
+// contract requires name == directory (data-model §1: removes 002's name/dir
+// drift), so the fixture directory equals the manifest name.
+func TestAdd_IdempotentByManifestName(t *testing.T) {
 	t.Parallel()
 
 	originDir := t.TempDir()
 	runGit(t, originDir, "init", "-q")
 
-	const dirName = "tf-review" // != manifest name "terraform-plan-review"
+	const dirName = "terraform-plan-review" // == manifest name (parse contract)
 	writeFile(t, originDir, filepath.Join("skills", dirName, "SKILL.md"), 0o644, sampleSkillMd)
 	writeFile(t, originDir, filepath.Join("skills", dirName, "skill.toml"), 0o644, sampleManifest)
 	runGit(t, originDir, "add", "-A")
-	runGit(t, originDir, "commit", "-q", "-m", "seed dir!=name skill")
+	runGit(t, originDir, "commit", "-q", "-m", "seed skill")
 
 	consumer := newConsumer(t)
 
@@ -141,7 +141,7 @@ func TestAdd_IdempotentWhenManifestNameDiffersFromDir(t *testing.T) {
 	}
 
 	if second.Action != ActionUnchanged {
-		t.Errorf("Action = %q, want %q (name!=dir must not false-refuse)", second.Action, ActionUnchanged)
+		t.Errorf("Action = %q, want %q (must not false-refuse)", second.Action, ActionUnchanged)
 	}
 }
 

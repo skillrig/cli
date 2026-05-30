@@ -31,7 +31,8 @@ const originRepo = "my-org/my-skills"
 // sampleSkill is the one skill the sample origin ships.
 const sampleSkill = "terraform-plan-review"
 
-// sampleVersion is the version recorded in the fixture's skill.toml.
+// sampleVersion is the version recorded in the fixture's SKILL.md frontmatter
+// (metadata.x-skillrig.version).
 const sampleVersion = "1.4.0"
 
 // originSubtree is the origin-relative path whose git tree-object SHA is the
@@ -278,7 +279,7 @@ var countsKeys = []string{"verified", "mismatch", "orphan", "missing", "dirty"}
 func assertVendoredMatchesOrigin(t *testing.T, c consumerRepo) {
 	t.Helper()
 
-	for _, f := range []string{"SKILL.md", "skill.toml", "check.sh"} {
+	for _, f := range []string{"SKILL.md", "check.sh"} {
 		got := readSkillFile(t, c.root, f)
 		want := readFile(t, filepath.Join(c.originDir, "skills", sampleSkill, f))
 

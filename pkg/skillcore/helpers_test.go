@@ -89,7 +89,29 @@ version = "0.50.0"
 optional = true
 `
 
-const sampleSkillMd = "# terraform-plan-review\n\nReview a terraform plan.\n"
+// sampleSkillMd is a representative SKILL.md carrying the standard agentskills.io
+// frontmatter plus the namespaced metadata.x-skillrig.* skillrig extensions. Its
+// `name` is the skill directory used by bootstrapOrigin (name == dir, the parse
+// contract); the Add happy path parses it via ParseManifest.
+const sampleSkillMd = `---
+name: terraform-plan-review
+description: Review a terraform plan for risk and drift.
+metadata:
+  x-skillrig.namespace: my-org
+  x-skillrig.version: 1.4.0
+  x-skillrig.convention-version: "1"
+  x-skillrig.topics: [platform-team, terraform, aws]
+  x-skillrig.requires:
+    - tool: oxid
+      version: ">=0.4.0"
+      source: my-org/my-skills
+      manager: mise
+---
+
+# terraform-plan-review
+
+Review a terraform plan.
+`
 
 // bootstrapOrigin creates a real git repo in a fresh tmpDir containing a single
 // committed skill at skills/<name>/, returning the repo dir and skill name. The

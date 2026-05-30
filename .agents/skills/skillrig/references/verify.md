@@ -23,9 +23,9 @@ first failure) and takes no arguments. Two checks:
 
 ## CRITICAL: verify is integrity-only — a missing backing tool is NOT a failure
 
-`verify` does **no** prerequisite/eligibility check. A skill may declare `[[requires]]` backing
-tools in its `skill.toml`; if those tools are absent in the environment, `verify` **still
-passes** (it checks content, not runnability). Prerequisite checking is a future `doctor`
+`verify` does **no** prerequisite/eligibility check. A skill may declare backing tools in its
+`SKILL.md` frontmatter (`metadata.x-skillrig.requires`); if those tools are absent in the
+environment, `verify` **still passes** (it checks content, not runnability). Prerequisite checking is a future `doctor`
 concern (the reserved exit `3`), never emitted here. Don't tell a user that verify failed
 because a tool isn't installed — that's never the cause.
 

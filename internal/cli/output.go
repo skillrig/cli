@@ -113,6 +113,104 @@ func addSummary(r skillcore.AddResult) string {
 	}
 }
 
+// searchResultJSON is the complete, untruncated --json view of a search. It
+// carries the resolved origin and every matching skill with all the fields add
+// needs (name, version, namespace, description, topics, path, requires). It is
+// the presentation projection of the matched skillcore.CatalogEntry slice (which
+// carries JSON tags of its own, reused here for completeness).
+type searchResultJSON struct {
+	Origin string                   `json:"origin"`
+	Skills []skillcore.CatalogEntry `json:"skills"`
+}
+
+// searchDescWidth is the human-output truncation width for a skill's one-line
+// description (cli.md Principle 3: compact human output, complete --json).
+const searchDescWidth = 60
+
+// renderSearchResult writes a search outcome to w. With jsonOut it emits one
+// complete JSON object (origin + every matching skill, all fields, [] not null
+// when empty); otherwise a compact human list — one line per match (name,
+// version, truncated description) plus a summary/footer hint — whose line count
+// is bounded by the number of matches plus a small constant (Constitution §II).
+// An empty result is "no skills matched" and is still success (exit 0). Data goes
+// to stdout (the caller passes cmd.OutOrStdout()).
+func renderSearchResult(w io.Writer, origin string, matches []skillcore.CatalogEntry, jsonOut bool) error {
+	if jsonOut {
+		enc := json.NewEncoder(w)
+		enc.SetEscapeHTML(false)
+
+		skills := matches
+		if skills == nil {
+			skills = []skillcore.CatalogEntry{}
+		}
+
+		return enc.Encode(searchResultJSON{Origin: origin, Skills: skills})
+	}
+
+	if len(matches) == 0 {
+		_, err := io.WriteString(w, "no skills matched\n"+searchEmptyFooter+"\n")
+
+		return err
+	}
+
+	var b strings.Builder
+
+	for _, e := range matches {
+		fmt.Fprintf(&b, "%s  %s  — %s\n", e.Name, e.Version, truncateDesc(e.Description))
+	}
+
+	fmt.Fprintf(&b, "%d skill(s) · run: skillrig add <name>\n", len(matches))
+
+	_, err := io.WriteString(w, b.String())
+
+	return err
+}
+
+// searchEmptyFooter is the next-step hint for an empty search result (still exit 0).
+const searchEmptyFooter = "→ broaden the query, or run skillrig search with no filter to list all"
+
+// truncateDesc collapses a description's newlines to spaces and clips it to
+// searchDescWidth for compact human output (the complete text is in --json).
+func truncateDesc(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	if len(s) <= searchDescWidth {
+		return s
+	}
+
+	return s[:searchDescWidth-1] + "…"
+}
+
+// indexResult is the presentation-layer view of an index generation: where the
+// catalog was written, how many skills it carries, and the convention it
+// declares. It is the single struct both renderers consume.
+type indexResult struct {
+	Out        string `json:"out"`
+	Skills     int    `json:"skills"`
+	Convention int    `json:"convention"`
+}
+
+// indexFooterHint is the next-step footer for a human index summary.
+const indexFooterHint = "→ commit it so search reads the current catalog"
+
+// renderIndexResult writes an index outcome to w. With jsonOut it emits one
+// complete JSON object (out, skills, convention — all keys present); otherwise a
+// compact human summary (≤2 lines incl. the footer hint). Data goes to stdout
+// (the caller passes cmd.OutOrStdout()).
+func renderIndexResult(w io.Writer, r indexResult, jsonOut bool) error {
+	if jsonOut {
+		enc := json.NewEncoder(w)
+		enc.SetEscapeHTML(false)
+
+		return enc.Encode(r)
+	}
+
+	summary := fmt.Sprintf("indexed %d skill(s) → %s\n", r.Skills, r.Out)
+
+	_, err := io.WriteString(w, summary+indexFooterHint+"\n")
+
+	return err
+}
+
 // verifyReportJSON is the complete, untruncated --json view of a verify report.
 // Top-level keys ok,counts,verdicts are always present; counts carries all five
 // fields and verdicts every checked skill with all six fields. It is the

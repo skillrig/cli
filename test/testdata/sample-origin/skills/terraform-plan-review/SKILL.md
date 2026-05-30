@@ -1,6 +1,20 @@
 ---
 name: terraform-plan-review
 description: Review a terraform plan for risk and drift before apply, flagging destructive changes, IAM/security-policy edits, and resources that will be replaced rather than updated.
+metadata:
+  x-skillrig.namespace: my-org
+  x-skillrig.version: 1.4.0
+  x-skillrig.convention-version: "1"
+  x-skillrig.topics: [platform-team, terraform, aws]
+  x-skillrig.requires:
+    - tool: oxid
+      version: ">=0.4.0"
+      source: my-org/my-skills
+      manager: mise
+    - tool: terraform
+      version: ">=1.6"
+      source: hashicorp/terraform
+      manager: mise
 ---
 
 # Terraform Plan Review

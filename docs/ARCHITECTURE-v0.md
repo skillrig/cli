@@ -32,8 +32,9 @@ my-org/my-skills  (the ORIGIN — created from the skillrig origin template)
 │   └── <other-clis>/        #   goreleaser + release-please, same pipeline as skills
 ├── skills/
 │   ├── terraform-plan-review/
-│   │   ├── SKILL.md         # agent-facing (vendors to consumer)
-│   │   └── skill.toml       # machine-facing manifest; [[requires]] may name a cmd/ CLI
+│   │   └── SKILL.md         # agent-facing + machine-facing manifest in one file:
+│   │                        #   YAML frontmatter carries metadata.x-skillrig.* (version,
+│   │                        #   topics, requires — a `requires` may name a cmd/ CLI). §4.1
 │   └── <more skills>/
 ├── index.json               # generated discovery artifact (committed); carries
 │                            #   skillrig-convention version (the contract, §2d)
@@ -55,9 +56,10 @@ The generic `skillrig` binary is a single static build (goreleaser, cross-OS/arc
 
 | Command | Job | Primary caller |
 |---|---|---|
-| `skillrig search [--tag ...]` | Query `index.json` for skills | human, agent |
-| `skillrig add <skill>` | Vendor a skill into this repo + write lock entry | human |
+| `skillrig search [QUERY...] [--topic ...]` | Query `index.json` for skills (token-AND over name/description/topics + `--topic` filter) | human, agent |
+| `skillrig add <skill> [--pin <ref>]` | Vendor a skill into this repo + write lock entry (local-path **or** remote fetch) | human |
 | `skillrig verify` | Offline: integrity only (label-honesty + orphan), exit code | **CI**, agent, human |
+| `skillrig index [--out <path>]` | **Origin-side**: generate `index.json` from `SKILL.md` frontmatter on merge to `main` | **origin CI** |
 | `skillrig bump --pr` | Detect upstream advance, open upgrade PR | **CI (cron)** |
 | `skillrig global add/verify <skill>` | Manage global-scope skills | human |
 | `skillrig doctor` | Superset health check (integrity + prereqs + auth) | human, agent |
@@ -83,7 +85,7 @@ A clarifying decision that *removes* a whole subsystem: **the CLI has no `publis
 | Telemetry | opt-**out** usage snapshot on sync | **none** — telemetry-free by default |
 
 Consequences:
-- The CLI's surface is **purely consumer-side**: `search`, `add`, `verify`, `doctor`, `bump --pr`, `global *`, `lint`. Agents and humans share one safe surface; there is no write credential baked into the binary.
+- The CLI's surface is **purely consumer-side**: `search`, `add`, `verify`, `doctor`, `bump --pr`, `global *`, `lint`, plus the origin-side `index` generator (CI-run, local-filesystem only — no auth). Agents and humans share one safe surface; there is **no write credential** baked into the binary. The token a private origin needs is a **read-only fetch** credential resolved at runtime via `os.exec` (§8b.2), never a registry write credential.
 - Even `bump --pr` is GitHub-native — it's a *consumer reconciling to upstream* that happens to open a PR; it uses a scoped CI token, not a registry credential. **Convention:** treat `bump --pr` as CI-invoked; a human's agent session generally shouldn't hold PR-create rights (minor, enforce by token scoping, not by code).
 - The only "write" the system does to the monorepo is **`index.json` regeneration**, and that's a merge-triggered GitHub Action running `skillrig index`, not a human/agent verb.
 - **Differentiator to state explicitly:** no registry service, no telemetry, no bespoke auth flow to build or operate — strictly better on N1 (operational surface) than every registry-backed tool studied, and the no-telemetry default matters for the compliance-conscious consumer.
@@ -112,7 +114,7 @@ skillrig is a *framework* any org can adopt, not a single-org tool. Three pieces
 
 **1. The generic `skillrig` binary (one build for everyone, R4).** Fetched via curl/mise like `gh` or `terraform`. It is **not** compiled per-org and carries **no baked-in origin** — that was the original single-org design (Model A) and it doesn't generalize. Rejected alternative (Model B, "template generates a per-org forked CLI"): every adopting org would run its own goreleaser/release pipeline to ship a binary whose logic is identical to everyone else's, and would be stranded on whatever version they generated. That duplicates operational surface for zero benefit (violates N1) and breaks central updates. So: one generic binary, centrally maintained; the "feels like our CLI" experience comes from it being *pointed at your origin*, not from being a different binary. (A branded shell alias is fine cosmetics; a forked binary is not.)
 
-**2. The origin template (how you stand up a library, R5d).** skillrig.dev provides a **GitHub template repo** — "Use this template → private repo → rename a few strings → dispatch the first release workflow." It ships the origin's structure (`skills/*/SKILL.md` + `skill.toml`, the `index.json` generation workflow, `lint`/CI checks, CODEOWNERS, branch-protection guidance) **and the Go-monorepo backing-CLI pattern** (`cmd/` building the org's private CLIs via goreleaser + release-please, alongside `skills/`). Standing up a library needs the git host's native features only — no CLI, no service. *(v0 ships one batteries-included template; vNext can add a minimal skills-only variant and other bootstrap paths.)*
+**2. The origin template (how you stand up a library, R5d).** skillrig.dev provides a **GitHub template repo** — "Use this template → private repo → rename a few strings → dispatch the first release workflow." It ships the origin's structure (`skills/*/SKILL.md` with skillrig metadata in its frontmatter — no sibling `skill.toml` as of 003, the `index.json` generation workflow that runs `skillrig index` on merge to `main`, `lint`/CI checks, CODEOWNERS, branch-protection guidance) **and the Go-monorepo backing-CLI pattern** (`cmd/` building the org's private CLIs via goreleaser + release-please, alongside `skills/`). Standing up a library needs the git host's native features only — no CLI, no service. *(v0 ships one batteries-included template; vNext can add a minimal skills-only variant and other bootstrap paths.)*
 
 **3. The origin as a versioned contract (R5e) — the key insight.** The origin's conventions *are the contract* the generic binary depends on: skill layout, index generation, tag/version scheme, the tree-SHA boundary. The template is the **reference implementation** of that contract. So the contract carries a **convention version** (e.g. a `skillrig-convention: 1` field in the origin's index/config); the binary checks it and fails clearly against an incompatible origin rather than silently misbehaving — the way Terraform pins provider schema versions. This lets the contract evolve deliberately in vNext without breaking deployed consumers, and makes "validating/evolving the origin conventions" a first-class, versioned activity rather than ad-hoc drift.
 
@@ -158,30 +160,38 @@ Realizes R6–R8. This is the most important architectural idea and the place mo
 
 ## 4. Lockfile & manifest schemas
 
-### 4.1 `skill.toml` (per-skill manifest — vendors with the skill, R16, R25)
+### 4.1 `SKILL.md` frontmatter (per-skill manifest — vendors with the skill, R16, R25)
 
-```toml
-name        = "terraform-plan-review"
-version     = "1.4.0"
-namespace   = "my-org"                  # reverse-DNS-ish namespacing
-description = "Review a terraform plan for risk and drift."
+**Changed in 003 (S1):** the per-skill manifest is the skill's own **`SKILL.md` YAML frontmatter**, not a sibling `skill.toml`. This adopts the [agentskills.io](https://agentskills.io) standard — standard fields (`name`, `description`, `license`, `compatibility`) verbatim, and skillrig-specific data under the standard's free-form `metadata` map, namespaced under `x-skillrig.*`. This is the field-source the catalog (`index`) is generated **from**, so the manifest format *is* the catalog's source of truth.
 
-# Deterministic discovery tags (R24). Suggestion UX is v1; the DATA ships now.
-tags = ["platform-team", "terraform", "aws"]
-
-# Backing-CLI prerequisites (R15). Declared, not installed (R17).
-[[requires]]
-tool       = "oxid"
-version    = ">=0.4.0"
-source     = "cdktn-io/oxid"            # private repo; mise gh backend
-manager    = "mise"                      # supported path; advisory
-
-[[requires]]
-tool       = "terraform"
-version    = ">=1.6"
-source     = "hashicorp/terraform"
-manager    = "mise"
+```yaml
+---
+name: terraform-plan-review
+description: Review a terraform plan for risk and drift.
+license: MIT
+metadata:
+  x-skillrig:
+    namespace: my-org              # reverse-DNS-ish namespacing
+    version: "1.4.0"
+    convention-version: "1"        # the origin-contract version (gated, §2d)
+    # Deterministic discovery topics (R24, renamed from "tags"). Suggestion UX is v1; the DATA ships now.
+    topics: [platform-team, terraform, aws]
+    # Backing-CLI prerequisites (R15). Declared, not installed (R17).
+    requires:
+      - tool: oxid
+        version: ">=0.4.0"
+        source: cdktn-io/oxid       # private repo; mise gh backend
+        manager: mise               # supported path; advisory
+      - tool: terraform
+        version: ">=1.6"
+        source: hashicorp/terraform
+        manager: mise
+---
 ```
+
+**Why frontmatter, and the `yaml.v3` divergence (S1, accepted 2026-05-31).** The original "sibling TOML file" reasons (two audiences, travels-with-skill, TOML cosmetics) didn't survive scrutiny: frontmatter is more atomic (one file, no name/description drift between two files), and the standard's `metadata` map exists *specifically* for ecosystem extensions, so aligning preserves portability across the 26+ agentskills.io-compliant clients. The cost is a new dependency — **`gopkg.in/yaml.v3`** — because frontmatter *is* YAML; this is the same parser the Go `gh` CLI uses in production for exactly this (flat dotted-prefix keys like `metadata.x-skillrig.version`), so it is a deliberate, validated divergence from the project's earlier "no new dependencies" / "TOML config" stance, not an accident. `.skillrig/config.toml` (origin config) stays TOML; only the per-skill manifest moves to YAML frontmatter.
+
+> **Correction to an early hypothesis:** the standard's `allowed-tools` field does **not** carry `requires` — it is a space-separated string of agent-permission tool invocations (gh rejects an array form). So `version`, `topics`, `namespace`, `convention-version`, **and** `requires` all live under `metadata.x-skillrig.*`. `x-skillrig.requires` is a nested list (bending the spec's string→string letter), parsed via `interface{}` the way gh does.
 
 ### 4.2 `.skillrig/skills-lock.json` (project scope — committed, R9–R11)
 
@@ -277,7 +287,7 @@ A skill's required CLI is one of two kinds, and skillrig handles both:
 - **Public CLIs — delegated to mise.** For widely-used tools (`terraform`, `gh`, …), provisioning is the developer's choice; **mise** is the supported/recommended path (`mise.toml` + shell hook = good onboarding). skillrig never becomes a binary package manager (R17); it declares and verifies, mise installs.
 
 Mechanics:
-- **Declare:** `[[requires]]` in `skill.toml` (§4.1), vendored so checks run offline (R16). A `source` of the org's own origin signals a private, co-located CLI; an external source signals a public one.
+- **Declare:** `metadata.x-skillrig.requires` in the skill's `SKILL.md` frontmatter (§4.1), vendored so checks run offline (R16). A `source` of the org's own origin signals a private, co-located CLI; an external source signals a public one.
 - **Check (doctor, not verify):** `skillrig doctor` checks each `requires` entry — on PATH (or resolvable via mise)? version satisfies constraint? — deterministic pass/fail with exit code (R11, R17). A `mise.toml` in the consumer repo is a **suggestion, not a requirement**: skillrig works without it and simply reports the binary missing from PATH; when a `mise.toml` *is* present, "resolvable via mise" counts as satisfied. This is **doctor's** job, not `verify`'s — `verify` validates vendored *content* (label-honesty + orphan) and needs no backing binaries; prerequisite/eligibility is what the *runtime agent* needs (clarified 2026-05-29, §2).
 - **Auth as a distinct failure (R18):** for private-repo tools (mise gh backend pulling from the origin or e.g. `cdktn-io/oxid`), `doctor` must distinguish "tool missing" from "tool exists but you can't authenticate to fetch it" — explicitly check `gh auth` / `GITHUB_TOKEN` reachability and report it as its own actionable error. The most common onboarding/CI footgun; surface it loudly.
 
@@ -292,7 +302,9 @@ Verified against mise's GitHub backend docs (current as of early 2026). Three fi
 - Because mise's `github:org/repo` shorthand tracks a repo's *latest release*, a monorepo with interleaved tag streams needs **per-tool tag filtering** (mise's version/tag-regex options) so each backing CLI tracks only its own prefix (`oxid-v*`). This is fiddly enough that **the template should generate the correct `mise.toml` stanza per backing CLI** — a concrete, valuable template job, not something each adopting org should reverse-engineer.
 - Rejected alternative: **separate repo per CLI** (`github:my-org/oxid`) is cleanest for mise (each tracks its own latest, no tag-regex), but it **breaks the co-location** that lets a skill and its CLI ship together — so it fights the design. Monorepo-with-tag-streams is the chosen path; see open question on exactly how the template stamps `tag_regex`.
 
-**(2) Auth resolution is well-defined and matches R18.** Token resolution order: `github.credential_command` (highest) → `MISE_GITHUB_TOKEN` env → `github_tokens.toml` → gh CLI `hosts.yml` → git credential fill. The **`credential_command`** hook (runs a shell command per host to fetch a token — 1Password/Vault/secret-manager friendly) is the clean **enterprise auth path**, and it's host-aware for GitHub Enterprise. In CI, `jdx/mise-action` uses `${{ github.token }}` by default, so private-repo fetches in the org's own Actions need no extra plumbing. This is the same git/token auth skillrig already relies on (R5b) — no new credential surface.
+**(2) Auth resolution is well-defined and matches R18.** mise resolves a GitHub token from (in order) the **env vars first** (`MISE_GITHUB_TOKEN` / `GITHUB_TOKEN`), then `github.credential_command`, then `github_tokens.toml`, then gh CLI `hosts.yml`, then git credential fill. The **`credential_command`** hook (runs a shell command per host to fetch a token — 1Password/Vault/secret-manager friendly) is the clean **enterprise auth path**, and it's host-aware for GitHub Enterprise. In CI, `jdx/mise-action` uses `${{ github.token }}` by default, so private-repo fetches in the org's own Actions need no extra plumbing. This is the same git/token auth skillrig already relies on (R5b) — no new credential surface.
+
+> **Correction (S3, 2026-05-31).** An earlier draft of this section claimed mise's precedence put `github.credential_command` *highest* (above the env vars). That is inaccurate — mise reads the env vars first. This does **not** affect skillrig, which never uses mise's `credential_command` and resolves its own fetch token directly via `os.exec`: `GH_TOKEN` env → `GITHUB_TOKEN` env → `gh auth token --hostname <host>` (exit 0 + non-empty = token; non-zero or `gh`-absent = skip, not fatal). skillrig injects that token per fetch via `git -c http.extraHeader="Authorization: Basic <base64(x-access-token:TOKEN)>"` — **never** in the clone URL (avoids history/process-listing leakage). `git credential fill` is deferred (the `gh` path already covers the keyring tokens mise reads from `hosts.yml`); GitHub Enterprise is deferred behind the `hostname` seam of `ResolveGitHubToken(hostname string)`.
 
 **(3) mise can verify what it pulls.** mise supports optional **SLSA provenance verification** and **GPG asset verification** for github-backend tools. This complements skillrig's own posture: skillrig verifies the *skill* (tree SHA + approval), mise can verify the *backing binary* (SLSA/GPG) — layered supply-chain integrity, neither owning the other's job.
 
@@ -304,9 +316,22 @@ Verified against mise's GitHub backend docs (current as of early 2026). Three fi
 
 ## 9. Discovery — generated `index.json` (R22–R24)
 
-- On release, `internal/index` walks `skills/*/skill.toml` and emits a committed `index.json` at repo root: name, version, description, tags, requires-summary, path.
-- `skillrig search [--tag platform-team]` reads `index.json` — deterministic filtering on tags (R24, N6). No standing infrastructure (R23, N1).
+- **On merge to `main`** (not "on release" — corrected in 003/S2; the origin's `index.yml` workflow is `push: main` paths `skills/**`), **`skillrig index`** walks `skills/*/SKILL.md`, parses each via the **same** `skillcore.ParseManifest` the consumer commands use (AP-04), and emits a committed `index.json` at repo root: per-skill `name`, `version`, `namespace`, `description`, `topics[]`, `path` (+ a `requires` summary); catalog-level `skillrigConvention` + `origin`. The producer's output **must equal** the committed `index.json` — a ground-truth contract test, mirroring the tree-SHA oracle.
+- **Single-tip, full-regenerate (D-S2).** `index.json = f(HEAD frontmatter)` — it reflects only the branch tip (one version per skill = the HEAD/latest-released version), is fully regenerated each run, and accumulates nothing (GC is YAGNI). It is **never** a version-history index: a skill's prior versions live in git tags, reached by `add --pin <tag>` fetching the tag subtree directly. A skill removed at HEAD correctly drops from `search` while already-vendored consumers stay fine (their lock is offline-verifiable). Cross-ref tag aggregation was considered and rejected (it would need unbounded tag-walking and break the single root `skillrigConvention`).
+- **Why `index` ships in-repo (not a roadmap deferral).** `search` is meaningless against a hand-maintained catalog that drifts — the shipped `build-index.sh` *provably* drifts (it emits only `name/version/description/path`, dropping `topics`/`requires`, which is FR-023). Since skillrig is the single tool for origin maintenance too and the hard part (the frontmatter parser) is already built by the consumer side, `index` is a thin walk+marshal reusing `ParseManifest` — AP-04 by construction. It is consume-only in the credential sense (no auth, local-FS only).
+- `skillrig search terraform --topic platform-team` reads `index.json` — query-first token-AND over `name`+`description`+`topics`, deterministic order, exact `--topic` filter (R24, N6; `topics` renamed from `tags`). No standing infrastructure (R23, N1).
 - **GH Pages is dropped from v0.** It added a second system for what `index.json` already provides; for a private repo it would also require Enterprise + private-Pages config purely for browse convenience. If a human browse UI is wanted later (D3), point mkdocs + a client-side search index (pagefind/lunr) at the *same* `index.json` — one source of truth, Pages becomes optional sugar.
+
+### 9a. 003 co-evolution / FR-023–FR-024 doc-sync tracker
+
+003 touches two repos + the doc set; recorded here so nothing silently drifts:
+
+- **FR-023 — origin template (`skillrig/origin-template`):** reconcile `scripts/build-index.sh` and the committed `index.json` so the catalog carries every field `search` consumes (notably `topics`); fold each `skills/*/skill.toml` into its `SKILL.md` frontmatter and delete the sibling file; record the schema as the convention-1 catalog contract; point `index.yml` at `skillrig index`. **This in-repo doc-sync does *not* perform that separate `skillrig-origin` migration** — it remains the open FR-023 item.
+- **FR-024 — these docs:** the 003+004 merge, the local-vs-remote reframe, `SKILL.md` frontmatter + `yaml.v3`, "catalog on **merge** not on release", and the mise token-precedence correction are recorded above and in `docs/ROADMAP.md`; the CLI behavior (search Query + remote `add` Vendor Mutation + `index` generator, `--pin`/`--topic`, the new error classes) is recorded in `docs/design/cli.md`.
+- **Constitution touch-ups (C14 — one pass, team-approved; the constitution is *not* edited by this doc-sync, only the list is recorded for the amendment):**
+  1. **§III, the ground-truth bullet that reads "generated from a real `skills/*/skill.toml` walk":** `skill.toml` → **`SKILL.md` frontmatter** (the index source moved in S1).
+  2. **§III, the testing-tiers "Unit" bullet ("`httptest` + go-vcr cassettes for the GitHub path"):** skillrig shells `git` and never calls the GitHub HTTP API, so the faithful seam is the **exec-stub** (the existing `pkg/skillcore/git.go` `commandContext`/`TestHelperProcess` re-exec, extended to `Clone`/`FetchSparse`), **not** `httptest`/go-vcr. The happy/integrity path uses `file://` + a local bare repo.
+  3. **§IX — the stale eval-tooling path:** the eval runner is `.agents/skills/skill-creator/scripts/run_eval.py`, not the `scripts/run_eval.py` the constitution currently cites.
 
 ---
 
@@ -420,14 +445,15 @@ Consolidates the phasing scattered through the doc. **v0** is the minimum cohere
 
 ### v0 — the minimum coherent framework
 The smallest thing that delivers the core promise ("the skill your agent runs is the version you approved") end-to-end.
-- Generic `skillrig` binary; consumer command surface: `search`, `add`, `verify`, `doctor`, `bump --pr`, `global *`, `lint`, `init` (§2).
+- Generic `skillrig` binary; consumer command surface: `search`, `add`, `verify`, `doctor`, `bump --pr`, `global *`, `lint`, `init` + the origin-side `index` generator (§2). **`search` + remote `add` + `index` ship as one merged slice (003), not the original 003/004 split** — they share the remote-fetch layer and the catalog (`search` is useless without a generator that doesn't drift). The same slice migrates the manifest to `SKILL.md` frontmatter (§4.1).
+- **Local-vs-remote origin (003).** `add`/`search` classify the origin: a path-shaped origin operates on a local checkout (002 behavior, generalized to a real path), a bare `OWNER/REPO` is fetched remotely (sparse `git` clone). No "both present" precedence; no tool-managed cache of a remote origin.
 - Two scopes: project (vendored, verify-only) + global (fetch/restore) (§3). **Two tiers only** — no "shared" middle tier.
-- Lockfile with `commit` (provenance) + `treeSha` (label honesty) + `requires` (§4.2); `.skillrig/config.toml` (input) + `.skillrig/skills-lock.json` (output) (§2d).
-- Origin discovery via env > project config > global default; origin = git, **no auth of its own** (§2d).
-- One **batteries-included GitHub template** (skills + Go-monorepo backing-CLI pattern + index/lint/release workflows) (§2d).
-- Backing-CLI declare + **doctor**-side eligibility check (`[[requires]]`, `--eligible`-style readiness, auth-as-distinct-failure) (§8) — *not* in `verify`, which is integrity-only; mise consumption via **per-CLI tagged releases + template-generated `mise.toml`** (§8b).
+- Lockfile with `commit` (provenance) + `treeSha` (label honesty) + resolved `version`/tag + `requires`-summary (§4.2); `.skillrig/config.toml` (input) + `.skillrig/skills-lock.json` (output) (§2d). The per-skill **manifest is `SKILL.md` frontmatter** (`skill.toml` dropped, §4.1).
+- Origin discovery via env > project config > global default; the origin contract has **no auth of its own**, but a private origin is fetched with a **read-only token** resolved via `os.exec` (`GH_TOKEN` > `GITHUB_TOKEN` > `gh auth token`) (§2d, §8b.2).
+- One **batteries-included GitHub template** (skills + Go-monorepo backing-CLI pattern + index/lint/release workflows; `index.yml` runs `skillrig index` on merge) (§2d).
+- Backing-CLI declare + **doctor**-side eligibility check (`requires`, `--eligible`-style readiness, auth-as-distinct-failure) (§8) — *not* in `verify`, which is integrity-only; mise consumption via **per-CLI tagged releases + template-generated `mise.toml`** (§8b).
 - Multi-client materialization: canonical `.agents/skills` + symlink views, copy-fallback (§6).
-- Discovery via committed `index.json` (§9); **deterministic tags ship in the manifest** (data only).
+- Discovery via committed `index.json`, **generated by `skillrig index` on merge to `main`** (single-tip, full-regenerate — §9); **deterministic `topics` ship in the manifest** (data only; renamed from `tags`).
 - Drift-aware **three-way-merge bump** with conflict-markers-and-error (§5b).
 - `lint` as a required PR check on the origin (§2b).
 - Orphan protection effectively free at the `verify` gate (on-disk set must equal locked set) (§9b).

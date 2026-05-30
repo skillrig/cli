@@ -1,0 +1,32 @@
+{
+  "skillrigConvention": 1,
+  "origin": "my-org/my-skills",
+  "skills": [
+    {
+      "name": "terraform-plan-review",
+      "version": "1.4.0",
+      "namespace": "my-org",
+      "description": "Review a terraform plan for risk and drift before apply, flagging destructive changes, IAM/security-policy edits, and resources that will be replaced rather than updated.",
+      "topics": [
+        "platform-team",
+        "terraform",
+        "aws"
+      ],
+      "path": "skills/terraform-plan-review",
+      "requires": [
+        {
+          "Tool": "oxid",
+          "Version": "\u003e=0.4.0",
+          "Source": "my-org/my-skills",
+          "Manager": "mise"
+        },
+        {
+          "Tool": "terraform",
+          "Version": "\u003e=1.6",
+          "Source": "hashicorp/terraform",
+          "Manager": "mise"
+        }
+      ]
+    }
+  ]
+}

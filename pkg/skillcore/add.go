@@ -2,11 +2,13 @@ package skillcore
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -25,10 +27,19 @@ const (
 // vendorRoot is the canonical, repo-relative root every skill is vendored under.
 const vendorRoot = ".agents/skills"
 
-// AddOptions configures Add. The caller supplies an already-resolved local
-// origin checkout (OriginDir + Ref); skillcore neither resolves origins, reads
-// config, nor fetches.
+// AddOptions configures Add. The CLI supplies an already-resolved origin and
+// has classified its form (local-path vs remote OWNER/REPO) by populating the
+// coordinates below; skillcore neither resolves origins nor reads config.
+//
+// Form selection: a non-empty Owner AND Repo selects the REMOTE form (Add
+// fetches the skill subtree over git from https://github.com/Owner/Repo);
+// otherwise Add uses the LOCAL-PATH form against the OriginDir checkout (002
+// behavior, unchanged). The two forms are mutually exclusive — the remote
+// coordinates are simply absent for a local origin.
 type AddOptions struct {
+	// OriginDir and Ref drive the LOCAL-PATH form: OriginDir is the local origin
+	// checkout, Ref the revision to read (empty → HEAD upstream). Ignored when
+	// remote coordinates are set.
 	OriginDir string
 	Ref       string
 	Skill     string
@@ -38,8 +49,29 @@ type AddOptions struct {
 	// top-level origin field; it does not parse or resolve it (presentation- and
 	// resolution-free). Empty leaves any existing lock origin untouched.
 	Origin string
+	// Owner and Repo are the remote origin's OWNER/REPO halves. When BOTH are
+	// non-empty, Add takes the remote-fetch path; both empty selects the
+	// local-path form. The CLI classifies the form and fills these in.
+	Owner string
+	Repo  string
+	// SkillPath is the repo-relative subtree to fetch in the remote form (the
+	// catalog's path, e.g. "skills/<skill>"). Empty defaults to the conventional
+	// skills/<skill>. Unused by the local-path form.
+	SkillPath string
+	// Pin is the optional --pin reference for the remote form: a bare semver
+	// (^v?SEMVER$) is expanded via the name-vSEMVER tag scheme to
+	// <skill>-v<semver>; anything else is a literal git ref or commit SHA passed
+	// through unchanged (C3). Empty means "use Ref" (the origin @ref branch).
+	Pin    string
 	Force  bool
 	DryRun bool
+}
+
+// isRemote reports whether opts selects the remote-fetch form: both OWNER and
+// REPO halves of a remote origin reference are present. The two forms are
+// mutually exclusive, so an absent half means the local-path form (002).
+func (opts AddOptions) isRemote() bool {
+	return opts.Owner != "" && opts.Repo != ""
 }
 
 // AddResult reports what Add did, for the CLI to render.
@@ -77,30 +109,47 @@ func (e *OverwriteError) Error() string {
 	return fmt.Sprintf("refusing to overwrite %q", e.Path)
 }
 
-// Add vendors one skill from the local origin at opts.OriginDir into
-// opts.RepoRoot's canonical .agents/skills/<name>/, byte-identical and
-// mode-preserving, then writes/updates the lock. It refuses a divergent
-// overwrite unless opts.Force, writes nothing when opts.DryRun, and is
+// acquired is the form-independent result of locating a skill's source: the
+// on-disk directory to vendor from, its git-canonical tree-SHA, the resolved
+// upstream commit, and the human-readable version/tag to record in the lock.
+// Both the local-path and remote-fetch forms produce one, so the vendor + lock
+// path downstream is identical (AP-04: one byte-identical vendor, one tree-SHA,
+// one lock writer).
+type acquired struct {
+	srcDir  string
+	treeSha string
+	commit  string
+	version string
+	// cleanup removes any temp checkout the acquisition created (remote form). Add
+	// always defers it, so it is never nil — the local-path form returns a no-op
+	// (it vendors from the in-repo origin checkout, with nothing to remove).
+	cleanup func()
+}
+
+// Add vendors one skill into opts.RepoRoot's canonical .agents/skills/<name>/,
+// byte-identical and mode-preserving, then writes/updates the lock. The source
+// is the local origin checkout at opts.OriginDir (local-path form) or a remote
+// OWNER/REPO fetched over git (remote form, when opts.Owner and opts.Repo are
+// set); both forms converge on the same vendor + lock path. It refuses a
+// divergent overwrite unless opts.Force, writes nothing when opts.DryRun, and is
 // idempotent on identical content.
 func Add(opts AddOptions) (AddResult, error) {
-	srcDir, err := prepareSource(opts)
+	if err := validateSkillName(opts.Skill); err != nil {
+		return AddResult{}, err
+	}
+
+	acq, err := acquireSource(opts)
 	if err != nil {
 		return AddResult{}, err
 	}
 
-	manifest, err := ParseManifest(filepath.Join(srcDir, "skill.toml"))
-	if err != nil {
+	defer acq.cleanup()
+
+	if err := ensureNoSymlinks(acq.srcDir); err != nil {
 		return AddResult{}, err
 	}
 
-	originRelPath := "skills/" + opts.Skill
-
-	treeSha, err := TreeSHA(opts.OriginDir, opts.Ref, originRelPath)
-	if err != nil {
-		return AddResult{}, err
-	}
-
-	commit, err := revParse(opts.OriginDir, opts.Ref)
+	manifest, err := ParseManifest(filepath.Join(acq.srcDir, "SKILL.md"))
 	if err != nil {
 		return AddResult{}, err
 	}
@@ -108,17 +157,22 @@ func Add(opts AddOptions) (AddResult, error) {
 	destPath := vendorRoot + "/" + opts.Skill
 	destDir := filepath.Join(opts.RepoRoot, ".agents", "skills", opts.Skill)
 
-	action, err := resolvePlacement(opts, manifest.Name, srcDir, destDir, treeSha)
+	action, err := resolvePlacement(opts, manifest.Name, acq.srcDir, destDir, acq.treeSha)
 	if err != nil {
 		return AddResult{}, err
 	}
 
+	version := manifest.Version
+	if acq.version != "" {
+		version = acq.version
+	}
+
 	result := AddResult{
 		Name:    manifest.Name,
-		Version: manifest.Version,
+		Version: version,
 		Path:    destPath,
-		Commit:  commit,
-		TreeSha: treeSha,
+		Commit:  acq.commit,
+		TreeSha: acq.treeSha,
 		Action:  action,
 		DryRun:  opts.DryRun,
 	}
@@ -133,7 +187,7 @@ func Add(opts AddOptions) (AddResult, error) {
 		}
 	}
 
-	if err := copyTreePreservingModes(srcDir, destDir); err != nil {
+	if err := copyTreePreservingModes(acq.srcDir, destDir); err != nil {
 		return AddResult{}, err
 	}
 
@@ -144,28 +198,127 @@ func Add(opts AddOptions) (AddResult, error) {
 	return result, nil
 }
 
-// prepareSource validates the skill name, locates the origin skill subtree, and
-// rejects any symlink within it — all the safety pre-flight before Add touches
-// the filesystem. opts.Skill is used as a path segment for the source, the
-// destination, and os.RemoveAll on overwrite, so a traversal name (e.g. "../x")
-// must be refused here, before any copy or delete can escape the canonical
-// subtree; a symlink would let copy/compare follow it outside the subtree and
-// break byte-identical/git-canonical vendoring.
-func prepareSource(opts AddOptions) (string, error) {
-	if err := validateSkillName(opts.Skill); err != nil {
-		return "", err
+// acquireSource locates the skill's source for the selected form, computing the
+// git-canonical tree-SHA, the resolved upstream commit, and (for a remote pin)
+// the resolved version/tag. The skill name is validated by the caller (Add)
+// before this runs, so opts.Skill is already a safe single path segment.
+func acquireSource(opts AddOptions) (acquired, error) {
+	if opts.isRemote() {
+		return acquireRemote(opts)
 	}
 
+	return acquireLocal(opts)
+}
+
+// acquireLocal is the 002 local-path form: vendor from the in-repo origin
+// checkout at opts.OriginDir. The tree-SHA and commit come from the local git
+// repo; the version is the manifest's (acquired.version left empty so Add reads
+// the manifest). The cleanup is a no-op — nothing temporary was created.
+func acquireLocal(opts AddOptions) (acquired, error) {
 	srcDir, err := locateSkillSource(opts)
 	if err != nil {
-		return "", err
+		return acquired{}, err
 	}
 
-	if err := ensureNoSymlinks(srcDir); err != nil {
-		return "", err
+	originRelPath := "skills/" + opts.Skill
+
+	treeSha, err := TreeSHA(opts.OriginDir, opts.Ref, originRelPath)
+	if err != nil {
+		return acquired{}, err
 	}
 
-	return srcDir, nil
+	commit, err := revParse(opts.OriginDir, opts.Ref)
+	if err != nil {
+		return acquired{}, err
+	}
+
+	return acquired{
+		srcDir:  srcDir,
+		treeSha: treeSha,
+		commit:  commit,
+		cleanup: func() {},
+	}, nil
+}
+
+// acquireRemote is the remote-fetch form: it resolves the pin to a concrete ref,
+// fetches the skill subtree from OWNER/REPO via FetchSkill (the ONE fetch impl,
+// AP-04), then computes the tree-SHA over the fetched checkout with the same
+// TreeSHA verify uses. The fetched temp dir is the caller's to remove, so the
+// returned cleanup removes it.
+//
+// version records the human-readable label for the lock: the resolved tag when a
+// pin was given (so `--pin v1.4.0` is honestly recorded as the tag it resolved
+// to), otherwise empty so Add falls back to the manifest version at the fetched
+// ref (data-model §3).
+func acquireRemote(opts AddOptions) (acquired, error) {
+	skillPath := opts.SkillPath
+	if skillPath == "" {
+		skillPath = "skills/" + opts.Skill
+	}
+
+	ref, version, pinned := resolvePin(opts.Skill, opts.Pin, opts.Ref)
+
+	fetch, err := FetchSkill(context.Background(), FetchRequest{
+		Owner:     opts.Owner,
+		Repo:      opts.Repo,
+		Skill:     opts.Skill,
+		SkillPath: skillPath,
+		Ref:       ref,
+		Pinned:    pinned,
+	})
+	if err != nil {
+		return acquired{}, err
+	}
+
+	cleanup := func() { _ = os.RemoveAll(fetch.Dir) }
+
+	treeSha, err := TreeSHA(fetch.Dir, fetch.Commit, skillPath)
+	if err != nil {
+		cleanup()
+
+		return acquired{}, err
+	}
+
+	return acquired{
+		srcDir:  filepath.Join(fetch.Dir, filepath.FromSlash(skillPath)),
+		treeSha: treeSha,
+		commit:  fetch.Commit,
+		version: version,
+		cleanup: cleanup,
+	}, nil
+}
+
+// bareSemver matches a bare semantic version, optionally v-prefixed (e.g.
+// "v1.4.0" or "1.4.0"). A pin matching this is expanded via the name-vSEMVER tag
+// scheme; anything else (a full tag, a commit SHA) is taken literally (C3).
+var bareSemver = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// resolvePin maps a --pin value to the concrete git ref to fetch, the
+// human-readable version/tag to record in the lock, and whether a pin was given
+// (so a failed fetch of a pinned ref classifies as NoSuchVersionError, not a
+// missing skill — C2). The single deterministic rule (C3):
+//
+//   - empty pin → fetch the origin's branch ref (fallbackRef); record no
+//     explicit version (Add reads the manifest); not pinned.
+//   - bare semver (^v?SEMVER^$) → expand via the name-vSEMVER tag scheme to
+//     <skill>-v<semver>; that tag is both the ref and the recorded version.
+//   - any other value → a literal git ref or commit SHA, passed through as both
+//     the ref and the recorded version.
+//
+// So `--pin v1.4.0` and `--pin <skill>-v1.4.0` resolve to the same tag and thus
+// the same commit/treeSha (SC-004).
+func resolvePin(skill, pin, fallbackRef string) (ref, version string, pinned bool) {
+	if pin == "" {
+		return fallbackRef, "", false
+	}
+
+	if bareSemver.MatchString(pin) {
+		tag := skill + "-v" + strings.TrimPrefix(pin, "v")
+
+		return tag, tag, true
+	}
+
+	return pin, pin, true
 }
 
 // validateSkillName rejects any skill name that is not a single safe path
