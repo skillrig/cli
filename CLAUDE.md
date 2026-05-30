@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> PRE-RELEASE MARKER: As long as this marker is present we NEVER PLAN BACKWARD COMPATBILITY. We are in rapid iteration and may make breaking changes to the CLI and/or skill contract at any time. ANY PLAN IGNORES BACKWARD COMPATIBILITY.
+> PRE-RELEASE MARKER: As long as this marker is present we NEVER PLAN BACKWARD COMPATBILITY. We are in rapid iteration and may make breaking changes to the CLI and/or skill contract at any time. ANY PLANNING and DESIGN EFFORTS MUST IGNORE BACKWARD COMPATIBILITY.
 
 ## What this is
 
@@ -69,9 +69,10 @@ Features follow SpecLedger: **Specify → Clarify → Plan → Tasks → Review 
 <!-- Auto-managed by specledger - do not edit this section -->
 ## Active Technologies
 
-- Go 1.24+ (toolchain in this environment is 1.24.4; 1.25 also fine) — single static binary; cross-OS/arch via goreleaser later, out of scope here
-- Go standard `go test`. Two tiers — (a) in-process Cobra unit tests via `SetArgs`/`SetOut`/`SetErr` + table-driven resolver tests; (b) `TestQuickstart_*` integration tests that build and exec the real binary (Constitution II/III).
-- Local files only — project `.skillrig/config.toml`, global `~/.config/skillrig/config.toml` (XDG-aware). No database, no network.
-- `github.com/spf13/cobra` (command tree); `github.com/pelletier/go-toml/v2` (config read/write — see research.md). Dependencies kept minimal (consume-only
-- static binary).
+- Go 1.24+ (toolchain 1.24.4) — single static binary.
+- Go standard `go test`, two tiers (Constitution II/III): (a) **unit** — table-driven `skillcore` tests + a **ground-truth** test asserting `skillcore.TreeSHA` equals real `git` tree output; (b) **integration** — `TestQuickstart_*` build + exec the real binary over a fixture origin bootstrapped in a tmpDir. **No network boundary this slice → no `httptest`/go-vcr** (that tier arrives with remote `add`).
+- `github.com/pelletier/go-toml/v2` (config + `skill.toml` parse); lock uses stdlib `encoding/json`. **No new dependencies
+- and no in-process hashing dependency** — the tree-SHA is obtained by *shelling `git`* (see Runtime dependency + research). `go-getter` is explicitly *not* adopted this slice (acquisition is a local origin; OQ-3 deferred). Deps kept minimal (consume-only static binary).
+- existing only — `github.com/spf13/cobra` (command tree)
+- local files only — vendored subtree under `.agents/skills/<skill>/` (canonical, committed), `.skillrig/skills-lock.json` (committed, tool-written, atomic). `add` reads the resolved origin (a local path this slice). No database, no network.
 <!-- <<< specledger-generated -->
