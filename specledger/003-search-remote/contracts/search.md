@@ -18,7 +18,7 @@ skillrig search [QUERY...] [--topic T ...] [--json] [--verbose]
 ## Behavior
 1. Resolve origin via `config.ResolveOrigin` (env > project > global). No origin → usage error (FR exit 1).
 2. Fetch `index.json` from the origin **per call** (no cache, D-catalog-fetch); for a remote origin this is a sparse `git` fetch at the resolved `@ref` (D7) with token auth (D4); for a local-path origin, read it from disk.
-3. Gate `skillrigConvention` — unsupported → `IncompatibleConventionError` (FR-016).
+3. Gate `skillrigConvention` with **exact-match** (C1): `== 1` passes; **any other value — higher, lower, or absent/`0` — fails** with `IncompatibleConventionError` (FR-016), never partial results.
 4. **Match** (in-memory, `pkg/skillcore`, AP-04): keep entries where every QUERY term is a substring of `name+description+topics` AND every `--topic` is present. Empty QUERY + no `--topic` ⇒ list all.
 5. **Order** deterministically (D8, N6): fixed relevance bucket — exact-name `3` > name-hit `2` > topic-hit `1` > description-only `0` — then **lexicographic by `name`** (unique, total order). No fuzzy/semantic/learned ranking.
 6. Render two-level output.
@@ -38,7 +38,7 @@ skillrig search [QUERY...] [--topic T ...] [--json] [--verbose]
 - no origin → what/why/fix (`skillrig init --origin …`).
 - `IncompatibleConventionError`, `AuthError`, `UnreachableError` — distinct messages (data-model §5). `--verbose` shows raw cause.
 
-## Help (FR-018/SC-008)
+## Help (SC-008/FR-020)
 Purpose line + ≥2 examples (`skillrig search terraform`, `skillrig search --topic aws`). Asserted by `TestQuickstart_SearchHelpExamples`.
 
 ## Tests

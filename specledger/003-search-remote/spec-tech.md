@@ -30,7 +30,7 @@ Out of scope (reserved): verification-failure exit 2 and prerequisite exit 3; `b
 - **`.skillrig-origin.toml`** — `convention_version = 1`, `origin = "my-org/my-skills"`, `skills_dir = "skills"`, `cmd_dir = "cmd"`, `tag_scheme = "name-vSEMVER"` (a skill version is tagged e.g. `terraform-plan-review-v1.4.0`).
 - **`index.json`** (the catalog) — carries `skillrigConvention: 1`, `origin`, and `skills[]` with `name / version / namespace / description / tags / path / requires`. **No per-skill `treeSha` or `commit`** — the catalog is discovery-only.
 - **`skills/terraform-plan-review/`** — `skill.toml` (full manifest incl. `[[requires]]`) + `SKILL.md`. The single sample skill.
-- **`scripts/build-index.sh`** — a documentation-grade catalog emitter that **emits a reduced schema** (`name/version/description/path` only — drops `tags`, `namespace`, `requires`). This **drifts** from the committed `index.json` and from what `search --tag` needs. Reconciling this is FR-023 (scoped by Spike S2, §8b).
+- **`scripts/build-index.sh`** — a documentation-grade catalog emitter that **emits a reduced schema** (`name/version/description/path` only — drops `topics`, `namespace`, `requires`). This **drifts** from the committed `index.json` and from what `search --topic` needs. Reconciling this is FR-023 (scoped by Spike S2, §8b).
 - **`policy.toml`** — external-source allowlist (v1 governance; not consumed here).
 
 **Schema the CLI will consume for `search`** (must be the reconciled, full shape): per-skill `name`, `version`, `description`, `topics[]` (renamed from `tags` — S5/D8), `path`; catalog-level `skillrigConvention`, `origin`. `namespace` and `requires` may be carried but are not required by `search` this slice.
@@ -48,7 +48,7 @@ Remote `add` introduces a **fetch step in front of that subtree read**: instead 
 
 ## 4. Convention-version gate (cross-cutting, both commands)
 
-Architecture §2d.3: the generic binary speaks a **convention contract**; it must check the origin's `convention_version` (mirrored as `skillrigConvention` in the catalog) and **fail clearly** on an incompatible origin rather than misbehaving (FR-016). This binary supports convention `1`. Decide the compatibility policy (exact-match? `N` and `N-1`?) — see architecture open Q14. The check happens once, through the shared core, for both `search` and `add`.
+Architecture §2d.3: the generic binary speaks a **convention contract**; it must check the origin's `convention_version` (mirrored as `skillrigConvention` in the catalog) and **fail clearly** on an incompatible origin rather than misbehaving (FR-016). This binary supports convention `1` with an **exact-match policy** (decided 2026-05-31, review C1): `skillrigConvention == 1` passes; **any other value — higher, lower, or absent/`0` — fails** `IncompatibleConventionError` (FR-016). Exact-match is the YAGNI v0 choice; an `N`/`N-1` compatibility window is a deliberate future change (architecture Q14), not a `>`-only check that silently lets older/missing conventions through. The check happens once, through the shared core, for both `search` and `add`.
 
 ## 5. Identity, fingerprint, and pins
 
@@ -99,7 +99,7 @@ Each spike is time-boxed and writes to `specledger/003-search-remote/research/20
 
 ## 9. Co-evolution work items (this branch touches two repos + docs)
 
-- **FR-023 — origin template (`skillrig/origin-template`):** reconcile `scripts/build-index.sh` and the committed `index.json` so the catalog carries every field `search` consumes (notably `tags`); record the schema as the convention-1 catalog contract; note the `skillrig index` follow-up. Track whether these origin-repo edits are part of this branch's PR or a sibling work item.
+- **FR-023 — origin template (`skillrig/origin-template`):** reconcile `scripts/build-index.sh` and the committed `index.json` so the catalog carries every field `search` consumes (notably `topics`); record the schema as the convention-1 catalog contract; note the `skillrig index` follow-up. Track whether these origin-repo edits are part of this branch's PR or a sibling work item.
 - **FR-024 — `docs/ROADMAP.md` + `docs/ARCHITECTURE-v0.md`:** record the divergences — (a) roadmap 003 + 004 ship as **one** combined slice; (b) the 002 local-checkout seam is superseded by / now coexists with real remote acquisition; (c) the catalog schema is pinned to what `search` consumes. Per CLAUDE.md, a CLI behavior change updates `docs/design/cli.md` in the same branch — add the `search` command (Query pattern) and the remote `add` surface (incl. `--pin`).
 - **Skill co-evolution (constitution IX):** extend the single consolidated `skillrig` skill — add `references/search.md`, update `references/add.md` for the remote path + `--pin` + the new failure classes, and update the root routing/description keywords. Run trigger evals (`model: "sonnet"` per global instructions).
 

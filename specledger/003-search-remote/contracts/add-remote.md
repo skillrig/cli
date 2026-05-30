@@ -11,7 +11,7 @@ skillrig add <skill> [--pin <ref>] [--dry-run] [--force] [--json] [--verbose]
 | Flag | Meaning |
 |---|---|
 | `<skill>` | skill directory name (single safe path segment — 002 path-traversal guard applies) |
-| `--pin <ref>` | acquire an immutable tag/SHA (D5); `v1.4.0` resolves via `tag_scheme name-vSEMVER` → `<skill>-v1.4.0`; distinct from the origin `@ref` branch |
+| `--pin <ref>` | acquire an immutable tag/SHA (D5); distinct from the origin `@ref` branch. **Resolution order (C3, deterministic):** (1) if `<ref>` matches `^v?SEMVER$` (a bare version like `v1.4.0`/`1.4.0`) → expand via `tag_scheme name-vSEMVER` to `<skill>-v<semver>` and resolve that tag; (2) else treat `<ref>` as a **literal git ref** (a full `<skill>-vX.Y.Z` tag or a commit SHA) passed through unchanged. No ambiguity: a bare semver is always tag-expanded, anything else is literal; the two forms for the same release MUST resolve to the same commit/treeSha (asserted by quickstart). |
 | `--dry-run`/`--force`/`--json`/`--verbose` | as 002 |
 
 ## Behavior
@@ -36,7 +36,7 @@ skillrig add <skill> [--pin <ref>] [--dry-run] [--force] [--json] [--verbose]
 (Exit 2/3 reserved, never emitted here.)
 
 ## Errors (distinct, exit 1 — data-model §5)
-`NotFoundError` (skill not published — *if private + no token, hint to authenticate*, D4), `AuthError`, `UnreachableError`, `IncompatibleConventionError`, plus 002's `OriginNotFoundError`/`InvalidSkillNameError`/`SymlinkUnsupportedError`/overwrite-divergence. Pin to a non-existent version → `NotFoundError` variant "no such version <ref>". `--verbose` → raw cause.
+`NotFoundError` (skill not published — *if private + no token, hint to authenticate*, D4), `AuthError`, `UnreachableError`, `IncompatibleConventionError`, plus 002's `OriginNotFoundError`/`InvalidSkillNameError`/`SymlinkUnsupportedError`/overwrite-divergence. **Pin to a non-existent version → a distinct `NoSuchVersionError`** (C2) — a separate typed error from `NotFoundError` (the skill exists, the version doesn't), so callers branch on the type, not on message text. `--verbose` → raw cause.
 
 ## Help
 Purpose + ≥2 examples (`skillrig add terraform-plan-review`, `skillrig add terraform-plan-review --pin v1.4.0`). `TestQuickstart_AddHelpExamples` (002, extend for `--pin`).

@@ -10,7 +10,7 @@ All design uncertainties were resolved by four time-boxed spikes during `/specle
 
 ## D1 — Skill manifest format (Spike S1)
 
-**Decision:** Migrate each skill's machine metadata into **`SKILL.md` agentskills.io frontmatter**; drop the `skill.toml` sibling file. Standard fields (`name`, `description`) used verbatim; skillrig-specific data (`version`, `namespace`, `tags`, `convention-version`, `requires`) under the standard's free-form `metadata` map as **`metadata.x-skillrig.*`**. Parser: `gopkg.in/yaml.v3`.
+**Decision:** Migrate each skill's machine metadata into **`SKILL.md` agentskills.io frontmatter**; drop the `skill.toml` sibling file. Standard fields (`name`, `description`) used verbatim; skillrig-specific data (`version`, `namespace`, `topics`, `convention-version`, `requires`) under the standard's free-form `metadata` map as **`metadata.x-skillrig.*`**. Parser: `gopkg.in/yaml.v3`.
 
 **Rationale:** The agentskills.io `metadata` map is the spec-sanctioned extension point (its own example puts `version` there). The Go `gh` CLI does exactly this in production (`internal/skills/frontmatter/frontmatter.go`, `yaml.v3`, flat dotted keys like `metadata.github-tree-sha`, prefixed to avoid collisions). One atomic file per skill, portability across 26+ compliant clients, no parallel format to lint, and it removes 002's latent `name`/`description` duplication-drift bug. Migration is small/in-slice (commit 1): only `pkg/skillcore/manifest.go` (~47 lines, single caller `add.go:91`); `verify.go`'s `isSkillDir` already accepts `SKILL.md`.
 

@@ -18,6 +18,7 @@ Each scenario is an executable `TestQuickstart_*` (Constitution §II): concrete 
 **`TestQuickstart_SearchEmptyResult`** — `skillrig search --topic nonesuch` → `no skills matched`, **exit 0**.
 **`TestQuickstart_SearchJSONComplete`** — `--json` parses (`json.Unmarshal` ok) and every entry has name/version/namespace/description/topics/path (field-presence, not truncation).
 **`TestQuickstart_SearchConventionMismatch`** — origin catalog `skillrigConvention: 2` → exit 1, message names a compatibility mismatch + "update skillrig" (3 parts).
+**`TestQuickstart_SearchConventionBoundary`** (C1) — exact-match gate: `skillrigConvention: 0` **and** an absent field each → exit 1 `IncompatibleConventionError` (a lower/missing convention does **not** silently pass), while `1` passes — pinning the non-`>` boundary so FR-016/SC-005 is unambiguous.
 **`TestQuickstart_SearchHelpExamples`** — `search --help` shows purpose + ≥2 examples.
 
 ## US2 — Acquire remotely (add) · P1
@@ -25,11 +26,14 @@ Each scenario is an executable `TestQuickstart_*` (Constitution §II): concrete 
 **`TestQuickstart_AddRemoteNoLocalCopy`** — Given a `file://` origin and **no** local checkout, `skillrig add terraform-plan-review` vendors the subtree into `.agents/skills/…` byte-identical to the fixture, writes a lock entry (`version`/`commit`/`treeSha`/`path`); then **`skillrig verify` exits 0**. Ground-truth: lock `treeSha` == raw `git ls-tree`.
 **`TestQuickstart_AddRemoteIdempotent`** — re-running `add` on the unchanged vendored skill → `unchanged`, **exit 0**, lock byte-unchanged, no FS change (SC-006).
 **`TestQuickstart_AddRemoteForceOnDivergence`** — locally modify the vendored skill, re-`add` → refused with a `--force` hint (002 parity); `--force` overwrites.
+**`TestQuickstart_AddDryRun`** (C6) — `add … --dry-run` prints a bounded preview, **exit 0**, and leaves the working tree + lock byte-unchanged (`git status --porcelain` empty, lock unchanged) — FR-020 dry-run for the remote path.
+**`TestQuickstart_AddHelpExamples`** (C5) — `add --help` shows the purpose line + **≥2 runnable examples**, one of which is the `--pin` form (SC-008 for the second consumer command; bounded shape).
 
 ## US3 — Reproducible pin · P2
 
 **`TestQuickstart_AddPinnedReproducible`** — `add … --pin v1.4.0` on two clean repos → byte-identical content + identical lock (`version=1.4.0`, same `commit`/`treeSha`) (SC-004).
-**`TestQuickstart_AddPinNotFound`** — `--pin v9.9.9` → exit 1, "no such version v9.9.9" distinct from skill-not-found (FR-015).
+**`TestQuickstart_AddPinTagFormEquivalent`** (C3) — `add … --pin v1.4.0` and `add … --pin terraform-plan-review-v1.4.0` resolve to the **same** `commit`/`treeSha` (bare-semver expansion == full-tag literal), confirming the deterministic `--pin` resolution rule.
+**`TestQuickstart_AddPinNotFound`** — `--pin v9.9.9` → exit 1; assert the error is a **`NoSuchVersionError`** (typed/structured discriminator, not a substring) — distinct from skill-not-found (FR-015, C2).
 
 ## US4 — Trustworthy failures · P2 (unit-level via the stub seam + integration)
 
@@ -47,6 +51,8 @@ Each scenario is an executable `TestQuickstart_*` (Constitution §II): concrete 
 **`TestQuickstart_IndexDeterministic`** — run twice on unchanged skills → byte-identical output (SC-009).
 **`TestQuickstart_IndexMatchesCommitted`** — `skillrig index` output **equals** the committed PoC `index.json` (producer == artifact oracle).
 **`TestQuickstart_IndexMalformedFrontmatter`** — a skill with broken frontmatter → exit 1 naming the offending `SKILL.md`.
+**`TestQuickstart_IndexNotInOrigin`** (C8) — running `skillrig index` outside an origin repo (no `.skillrig-origin.toml` / unreadable `skills_dir`) → exit 1 with the what/why/fix "run inside the origin repo" navigation message.
+**`TestQuickstart_IndexMissingVersion`** (C9) — a skill whose frontmatter omits the required `x-skillrig.version` → exit 1 naming the offending `SKILL.md` (the catalog-entry validation rule from data-model §1; guards the seed-enrichment precondition of `IndexMatchesCommitted`).
 
 ## Regression (no 002 break · SC-007)
 **`TestQuickstart_AddLocalPathStillWorks`** — the 002 local-path `add` suite passes unchanged against an explicit local-path origin.
@@ -57,9 +63,9 @@ Each scenario is an executable `TestQuickstart_*` (Constitution §II): concrete 
 ### Traceability
 | US | Scenarios | FRs | SCs |
 |---|---|---|---|
-| US1 search | SearchQueryMatchesNameDesc/ListsSkills/OrderingDeterministic/FilterByTopic/EmptyResult/JSONComplete/ConventionMismatch/HelpExamples | 001–002a, 005, 016, 021 | 002, 008 |
-| US2 add remote | AddRemoteNoLocalCopy/Idempotent/ForceOnDivergence | 006–010, 012 | 001, 003, 006 |
-| US3 pin | AddPinnedReproducible/AddPinNotFound | 013–015 | 004 |
-| US4 failures | Classify*/AddAuth/PrivateNotFound/Unreachable/Verbose | 016–020, 022 | 005 |
-| US5 index | IndexGenerates/Deterministic/MatchesCommitted/Malformed | 023, 025–028 | 009 |
+| US1 search | SearchQueryMatchesNameDesc/ListsSkills/OrderingDeterministic/FilterByTopic/EmptyResult/JSONComplete/ConventionMismatch/ConventionBoundary/HelpExamples | 001–002a, 003, 004, 005, 016, 020, 021 | 002, 005, 008 |
+| US2 add remote | AddRemoteNoLocalCopy/Idempotent/ForceOnDivergence/DryRun/HelpExamples | 006–010, 012, 020 | 001, 003, 006, 008 |
+| US3 pin | AddPinnedReproducible/AddPinTagFormEquivalent/AddPinNotFound | 013–015 | 004 |
+| US4 failures | Classify*/AddAuth/PrivateNotFound/Unreachable/Verbose | 016–019, 022 | 005 |
+| US5 index | IndexGenerates/Deterministic/MatchesCommitted/Malformed/NotInOrigin/MissingVersion | 023, 025–028 | 009 |
 | regression | AddLocalPathStillWorks + migration | 011 | 007 |

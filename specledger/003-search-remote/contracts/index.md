@@ -18,7 +18,7 @@ skillrig index [--out <path>] [--json] [--verbose]
 1. Locate the origin repo root + `skills_dir` (from `.skillrig-origin.toml`; default `skills`).
 2. Walk `<skills_dir>/*/SKILL.md`; `ParseManifest` each (the **same** parser `add`/`verify`/`search` use — AP-04).
 3. Project into catalog entries (`path` = dir relative to repo root); **sort by `name`** (determinism).
-4. Marshal `index.json` with stable key order + trailing newline; carry `skillrigConvention: 1` + `origin`.
+4. Marshal `index.json` with stable key order + trailing newline; carry `skillrigConvention` **read from the origin's `.skillrig-origin.toml` `convention_version`** (not a hardcoded constant — C7, so producer and the consumer's exact-match gate share one source of truth) + `origin`.
 5. Write to `--out`. **Single-tip, full-regenerate** — overwrite wholesale; no aggregation, no GC (D2).
 
 ## Output
@@ -39,4 +39,4 @@ skillrig index [--out <path>] [--json] [--verbose]
 Malformed frontmatter → what/why/fix naming the offending `SKILL.md`. Not-in-origin → fix (`run inside the origin repo`). `--verbose` → raw cause.
 
 ## Tests
-`TestQuickstart_IndexGenerates` (fields incl. tags present), `_IndexDeterministic` (twice → identical), `_IndexMatchesCommitted` (oracle), `_IndexMalformedFrontmatter`.
+`TestQuickstart_IndexGenerates` (fields incl. topics present), `_IndexDeterministic` (twice → identical), `_IndexMatchesCommitted` (oracle), `_IndexMalformedFrontmatter`.
