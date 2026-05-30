@@ -1,13 +1,13 @@
 # Implementation Plan: Discover & Acquire Skills (`search` + remote `add` + `index`)
 
 **Branch**: `003-search-remote` | **Date**: 2026-05-31 | **Spec**: [spec.md](./spec.md)
-**Input**: [spec.md](./spec.md) + [spec-tech.md](./spec-tech.md) + research spikes [S1](./research/2026-05-31-skill-manifest-format.md) · [S2](./research/2026-05-31-catalog-generation-lifecycle.md) · [S3](./research/2026-05-31-auth-token-resolution.md) · [S4](./research/2026-05-31-remote-git-testing.md)
+**Input**: [spec.md](./spec.md) + [spec-tech.md](./spec-tech.md) + research spikes [S1](./research/2026-05-31-skill-manifest-format.md) · [S2](./research/2026-05-31-catalog-generation-lifecycle.md) · [S3](./research/2026-05-31-auth-token-resolution.md) · [S4](./research/2026-05-31-remote-git-testing.md) · [S5](./research/2026-05-31-search-index-architecture.md)
 
 ## Summary
 
 Deliver the first end-to-end consumer loop — **`init` → `search` → `add` → `verify`** — plus the origin-side **`index`** generator that keeps discovery honest. A user binds a repo to a remote GitHub origin, **finds** a skill (`search` reads the origin's catalog — query-first over name+description, deterministic `--topic` filter), and **vendors** it directly from the remote (`add` fetches the subtree, no local checkout), recording `commit` + `treeSha` + resolved `version/tag` in the lock so `verify` (002) still passes. The catalog `search` reads is produced by `skillrig index` from each skill's **`SKILL.md` frontmatter** — which this slice migrates to (dropping `skill.toml`, the first build step), aligning with the agentskills.io standard.
 
-All four design uncertainties were resolved in spikes **before** planning (S1 manifest format, S2 catalog lifecycle, S3 auth, S4 testing); this plan consumes their conclusions and does not re-open them.
+All five design uncertainties were resolved in spikes **before**/during planning (S1 manifest format, S2 catalog lifecycle, S3 auth, S4 testing, S5 search/index architecture); this plan consumes their conclusions and does not re-open them.
 
 ## Technical Context
 
@@ -44,7 +44,7 @@ All four design uncertainties were resolved in spikes **before** planning (S1 ma
 specledger/003-search-remote/
 ├── plan.md              # this file
 ├── spec.md  spec-tech.md
-├── research/2026-05-31-*.md   # S1–S4 spikes (done)
+├── research/2026-05-31-*.md   # S1–S5 spikes (done)
 ├── research.md          # Phase 0 — consolidates the spikes + prior work
 ├── data-model.md        # Phase 1 — manifest, catalog, lock, typed errors
 ├── quickstart.md        # Phase 1 — US1–US5 → TestQuickstart_*
@@ -82,8 +82,14 @@ test/                            # TestQuickstart_* (build+exec real binary) —
 2. **`skillrig index` + contract test** — `catalog.go` generate: walk `skills/*/SKILL.md`, `ParseManifest`, marshal `index.json`; `index.go` CLI. Ground-truth: `index` over the origin fixture == committed `index.json`. *(S2)*
 3. **Remote fetch layer** — `fetch.go`: `git clone --sparse`/sparse-checkout at ref; `ResolveGitHubToken(hostname)` via `os.exec` (GH_TOKEN→GITHUB_TOKEN→`gh auth token`); classify `GitError.Stderr`→`AuthError`/`NotFoundError`/`UnreachableError`; inject token via `git -c http.extraHeader`. Unit-tested on the exec-stub seam. *(S3, S4)*
 4. **Remote `add`** — branch origin classification (local path vs remote `OWNER/REPO`); remote: fetch→byte-identical vendor (reuse 002 copy/treeSha)→lock with `commit`+`treeSha`+resolved `version/tag`; `--pin`; idempotent no-op; force-on-divergence; map new errors in cli. *(S3/S4 + 002 reuse)*
-5. **`search`** — `catalog.go` parse; convention-version gate; deterministic AND-tag + substring filter; two-level output. *(S2)*
-6. **Co-evolution (FR-023/024)** — origin-template (frontmatter + `index.yml` calls `skillrig index`); `docs/ROADMAP.md`, `docs/ARCHITECTURE-v0.md` (003+004 merge, local-vs-remote reframe, frontmatter+`yaml.v3`, "on merge" not "on release", mise precedence fix), `docs/design/cli.md` (search/index/remote-add surface), constitution §III touch-ups; extend the `skillrig` skill + sonnet evals.
+5. **`search`** — `catalog.go` parse; convention-version gate; deterministic query matcher (`SearchCatalog(cat, query, topics)` in `skillcore`, **stdlib-only** — case-insensitive token-AND substring over `name`+`description`+`topics`, ordered by fixed-bucket score then name) + exact-string AND `--topic` filter; two-level output. *(S2, S5)*
+6. **Seed the origin with more skills (so `search` has real data to discover/filter)** — vendor several public skills into `skillrig-origin/skills/` and enrich each with `x-skillrig.*` frontmatter so the catalog carries `topics`/`version`. **Tool: `npx skills add` (NOT `sl skill add`).** Mechanics verified live (S5 addendum):
+   - `sl skill add` **cannot** be used here — it errors `not in a SpecLedger project` (the origin repo is not a SpecLedger project) and installs to `.claude/skills/`, not the canonical `skills/` dir.
+   - From `../../skillrig-origin/`, per skill run: `npx skills add <owner/repo> --skill <name> --copy -y`. `--copy` lands a real `skills/<name>/SKILL.md` (+ the skill's `references/`) in the origin's `skills_dir`. Candidates from the registry, e.g. `hashicorp/agent-skills@terraform-test`, `hashicorp/agent-skills@terraform-stacks`, `vercel-labs/agent-skills@creating-pr`.
+   - **Cleanup (required):** `npx skills add` also fans out ~25 agent-specific copies (`.claude/`, `.windsurf/`, `.cursor/`, …) — for an origin repo, commit **only** `skills/<name>/` and delete/gitignore the dot-dir copies.
+   - **Enrichment (required):** vendored `SKILL.md` carries standard agentskills.io frontmatter only (`name`/`description`, occasionally a `metadata.version`) — **no `metadata.x-skillrig.*`**. Add the skillrig block per skill: `x-skillrig.namespace`, `x-skillrig.version`, `x-skillrig.convention-version: "1"`, `x-skillrig.topics: [...]`, and `x-skillrig.requires` if it has backing CLIs. Without this, `skillrig index` cannot emit `topics`/`version` and `search --topic` has nothing to filter.
+   - Then regenerate via `skillrig index --out index.json` (step 2) and re-assert the contract test over the now-multi-skill fixture — giving `search`/`--topic` real multi-entry coverage in `TestQuickstart_*`.
+7. **Co-evolution (FR-023/024)** — origin-template (frontmatter + `index.yml` calls `skillrig index`); `docs/ROADMAP.md`, `docs/ARCHITECTURE-v0.md` (003+004 merge, local-vs-remote reframe, frontmatter+`yaml.v3`, "on merge" not "on release", mise precedence fix), `docs/design/cli.md` (search/index/remote-add surface), constitution §III touch-ups; extend the `skillrig` skill + sonnet evals.
 
 ## Complexity Tracking
 
