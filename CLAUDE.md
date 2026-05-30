@@ -71,10 +71,9 @@ Features follow SpecLedger: **Specify → Clarify → Plan → Tasks → Review 
 <!-- Auto-managed by specledger - do not edit this section -->
 ## Active Technologies
 
-- Go 1.24+ (toolchain 1.24.4) — single static binary.
-- Go standard `go test`, two tiers (Constitution II/III): (a) **unit** — table-driven `skillcore` tests + a **ground-truth** test asserting `skillcore.TreeSHA` equals real `git` tree output; (b) **integration** — `TestQuickstart_*` build + exec the real binary over a fixture origin bootstrapped in a tmpDir. **No network boundary this slice → no `httptest`/go-vcr** (that tier arrives with remote `add`).
-- `github.com/pelletier/go-toml/v2` (config + `skill.toml` parse); lock uses stdlib `encoding/json`. **No new dependencies
-- and no in-process hashing dependency** — the tree-SHA is obtained by *shelling `git`* (see Runtime dependency + research). `go-getter` is explicitly *not* adopted this slice (acquisition is a local origin; OQ-3 deferred). Deps kept minimal (consume-only static binary).
-- existing only — `github.com/spf13/cobra` (command tree)
-- local files only — vendored subtree under `.agents/skills/<skill>/` (canonical, committed), `.skillrig/skills-lock.json` (committed, tool-written, atomic). `add` reads the resolved origin (a local path this slice). No database, no network.
+- Go 1.24+ (toolchain 1.24.4) — single static binary (unchanged).
+- `github.com/spf13/cobra` (commands); `github.com/pelletier/go-toml/v2` (config + retained for `.skillrig/config.toml`); **NEW: `gopkg.in/yaml.v3`** (SKILL.md frontmatter — accepted 2026-05-31
+- `go test`, two tiers — (a) presentation-free **unit** in `internal/...` + `pkg/skillcore` (table-driven + ground-truth: fetched tree-SHA == raw `git`; `index` output == committed `index.json`); (b) **`TestQuickstart_*` integration** in `test/` building/exec'ing the real binary. **New network boundary** tested via S4's substrate: `file://` + local bare repo for happy/integrity; the existing `pkg/skillcore/git.go` `commandContext` exec-stub seam (extended to `Clone`/`FetchSparse`) for auth/unreachable/transient. **No `httptest`/go-vcr** (skillrig shells `git`, never calls the GitHub HTTP API — see Constitution Check).
+- local files only — vendored subtree `.agents/skills/<skill>/`, committed lock `.skillrig/skills-lock.json`; origin-side `index.json` (committed in the origin). No DB. **No tool-managed cache** (catalog fetched per `search`).
+- the parser `gh` uses; see Complexity Tracking). Lock uses stdlib `encoding/json`. Fetch + tree-SHA via **shelling `git`** (no in-process git/hashing lib). Token via `os.exec` of `git`/`gh` (no `gh`-as-library).
 <!-- <<< specledger-generated -->
