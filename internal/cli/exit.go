@@ -1,6 +1,11 @@
 package cli
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/skillrig/cli/pkg/skillcore"
+)
 
 // Load-bearing process exit codes (docs/design/cli.md). These are part of the
 // CLI contract: scripts and agents branch on them, so their meanings are fixed.
@@ -10,9 +15,9 @@ const (
 	// ExitUsage signals a usage or configuration error (bad flags, invalid
 	// origin, no origin configured, unwritable config).
 	ExitUsage = 1
-	// ExitVerification is reserved for a future verification failure (e.g. a
-	// `verify` command). Declared here so the meaning is stable; unused in this
-	// feature.
+	// ExitVerification signals a verification failure (`verify` found at least
+	// one mismatch / orphan / missing / dirty skill). Mapped from a
+	// *skillcore.VerifyFailure.
 	ExitVerification = 2
 	// ExitPrereq is reserved for a future missing-prerequisite failure.
 	// Declared here for stability; unused in this feature.
@@ -44,12 +49,21 @@ func usageErrorf(format string, args ...any) *UsageError {
 	return &UsageError{Msg: fmt.Sprintf(format, args...)}
 }
 
-// exitCodeFor maps a returned error to a process exit code. nil → ExitOK; every
-// error in this feature's surface (usage/config) → ExitUsage. Codes 2/3 are
-// reserved for later commands and never returned here.
+// exitCodeFor maps a returned error to a process exit code (a typed switch, so
+// the gate's exit code can never diverge from the error class that produced it):
+//   - nil                       → ExitOK (0)
+//   - *skillcore.VerifyFailure  → ExitVerification (2)
+//   - everything else           → ExitUsage (1)
+//
+// Code 3 (prerequisite) is reserved for a future `doctor` and never returned.
 func exitCodeFor(err error) int {
 	if err == nil {
 		return ExitOK
+	}
+
+	var verifyFail *skillcore.VerifyFailure
+	if errors.As(err, &verifyFail) {
+		return ExitVerification
 	}
 
 	return ExitUsage

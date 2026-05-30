@@ -11,6 +11,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/skillrig/cli/pkg/skillcore"
 )
 
 // globalOpts holds the persistent, command-wide output flags. Shared by value
@@ -56,7 +58,17 @@ func newRootCmd(opts *globalOpts) *cobra.Command {
 // renderError prints an error as navigation: the actionable what/why/fix
 // message, plus the raw cause when --verbose is set. Always to stderr; the
 // write itself is best-effort.
+//
+// A *skillcore.VerifyFailure is rendered to NOTHING here: the verify command
+// already wrote the per-skill report to stdout (the report IS the message), so
+// printing a generic "error:" line on stderr would double-report. The non-nil
+// error still drives the exit code (2) via exitCodeFor.
 func renderError(w io.Writer, err error, verbose bool) {
+	var verifyFail *skillcore.VerifyFailure
+	if errors.As(err, &verifyFail) {
+		return
+	}
+
 	_, _ = io.WriteString(w, errorMessage(err, verbose))
 }
 
@@ -96,4 +108,6 @@ func Execute() int {
 // separate so each user story wires its command here as it lands.
 func registerSubcommands(root *cobra.Command, opts *globalOpts) {
 	root.AddCommand(newInitCmd(opts))
+	root.AddCommand(newAddCmd(opts))
+	root.AddCommand(newVerifyCmd(opts))
 }

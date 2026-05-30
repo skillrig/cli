@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> PRE-RELEASE MARKER: As long as this marker is present we NEVER PLAN BACKWARD COMPATBILITY. We are in rapid iteration and may make breaking changes to the CLI and/or skill contract at any time. ANY PLAN IGNORES BACKWARD COMPATIBILITY.
+> PRE-RELEASE MARKER: As long as this marker is present we NEVER PLAN BACKWARD COMPATBILITY. We are in rapid iteration and may make breaking changes to the CLI and/or skill contract at any time. ANY PLANNING and DESIGN EFFORTS MUST IGNORE BACKWARD COMPATIBILITY.
 
 ## What this is
 
@@ -57,10 +57,24 @@ Scripts and agents branch on them, so meanings are fixed (`internal/cli/exit.go`
 - **Errors as navigation.** Every error states what failed, the *real* (never-swallowed) cause, and a suggested fix. `--verbose` is the escape hatch that prints the raw underlying cause — it must exist on every command. See `cli.md` Principle 2 and anti-patterns AP-03.
 - **Two-level output.** Human output is compact with a footer hint; `--json` is complete and untruncated. `--json`/`--verbose` are persistent root flags (`globalOpts`); mutating commands also take `--dry-run`, and `add`/`update` take `--force`. Tests must assert output *shape* (bounded line count for human, parseable + structurally complete for JSON), not just `Contains` (constitution §II).
 - **Classify every new command** into a `cli.md` pattern (Query / Vendor Mutation / Verification Gate / Environment / Global Management) and run the `docs/design/checklist-template.md` gate before merge.
-- **Skill–CLI co-evolution (constitution IX).** Every CLI change ships a matching skill update with verified trigger accuracy. The relevant skill lives in `.agents/skills/skillrig-init/`; eval tooling is `.agents/skills/skill-creator/scripts/run_eval.py` (note: the constitution's `scripts/run_eval.py` path is stale). Per global instructions, run skill evals with `model: "sonnet"`.
+- **Skill–CLI co-evolution (constitution IX).** Every CLI change ships a matching skill update with verified trigger accuracy. There is **one consolidated skill** for the whole CLI at `.agents/skills/skillrig/` — a short root `SKILL.md` that routes to per-activity detail in `references/` (`init.md`/`add.md`/`verify.md`). A new command **extends** this skill (add a `references/<cmd>.md` + update the root's routing table + description keywords); do **not** create a new top-level `skillrig-<cmd>` skill. Eval tooling is `.agents/skills/skill-creator/scripts/run_eval.py` (note: the constitution's `scripts/run_eval.py` path is stale). Per global instructions, run skill evals with `model: "sonnet"`.
 
 ## Workflow & tracking
 
 Features follow SpecLedger: **Specify → Clarify → Plan → Tasks → Review → Implement**, with artifacts under `specledger/<NNN-feature>/` (spec, plan, tasks, quickstart, contracts, data-model). Quickstart scenarios are the acceptance contract (each maps to a `TestQuickstart_<scenario>` integration test) and are written during planning.
 
-**Read `AGENTS.md` before tracking work or committing.** It defines the two repo-specific operating rules this project enforces: (1) all work-item tracking goes through the built-in `sl issue` CLI (issues stored per-spec in `specledger/<spec>/issues.jsonl`) — **never** ad-hoc markdown TODO lists; and (2) the commit/PR conventions (conventional prefixes, imperative ≤72-char subjects, testing evidence in PRs). It exists so task tracking and history stay in one git-friendly system rather than fragmenting across tools — consult it for the exact commands and the precise scope of each rule.
+**Commit & PR conventions.** Conventional prefixes (`feat:`, `fix:`, `chore:`, `docs:`), imperative subjects ≤72 chars, scoped to the feature (e.g. `docs(002): …`). Reference related issues in the body; call out migrations / new binaries explicitly. PRs carry a concise summary + testing evidence (`make test-unit`, `make test-integration`) and a CLI transcript when behavior changes.
+
+**Work-item tracking.** The durable, team-visible record lives in the SpecLedger issue tracker — `sl issue`, stored per-spec in `specledger/<spec>/issues.jsonl` (committed to git). The agent's in-session task list (the `Task*` tools) is an ephemeral execution aid, not a substitute for that committed record.
+
+<!-- >>> specledger-generated -->
+<!-- Auto-managed by specledger - do not edit this section -->
+## Active Technologies
+
+- Go 1.24+ (toolchain 1.24.4) — single static binary.
+- Go standard `go test`, two tiers (Constitution II/III): (a) **unit** — table-driven `skillcore` tests + a **ground-truth** test asserting `skillcore.TreeSHA` equals real `git` tree output; (b) **integration** — `TestQuickstart_*` build + exec the real binary over a fixture origin bootstrapped in a tmpDir. **No network boundary this slice → no `httptest`/go-vcr** (that tier arrives with remote `add`).
+- `github.com/pelletier/go-toml/v2` (config + `skill.toml` parse); lock uses stdlib `encoding/json`. **No new dependencies
+- and no in-process hashing dependency** — the tree-SHA is obtained by *shelling `git`* (see Runtime dependency + research). `go-getter` is explicitly *not* adopted this slice (acquisition is a local origin; OQ-3 deferred). Deps kept minimal (consume-only static binary).
+- existing only — `github.com/spf13/cobra` (command tree)
+- local files only — vendored subtree under `.agents/skills/<skill>/` (canonical, committed), `.skillrig/skills-lock.json` (committed, tool-written, atomic). `add` reads the resolved origin (a local path this slice). No database, no network.
+<!-- <<< specledger-generated -->

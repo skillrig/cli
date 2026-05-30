@@ -1,7 +1,8 @@
 # skillrig-cli build & test tasks.
 # Test tiers map to the package layout (Constitution III):
-#   unit        -> ./internal/...   (mocked/recorded boundaries, fast)
-#   integration -> ./test/...       (TestQuickstart_*; builds & execs the real binary)
+#   unit        -> ./internal/... ./pkg/...  (presentation-free logic + skillcore
+#                  ground-truth/table-driven tests, fast; no real binary)
+#   integration -> ./test/...                (TestQuickstart_*; builds & execs the binary)
 
 BINARY := skillrig
 
@@ -13,8 +14,8 @@ build: ## Build the skillrig binary into ./$(BINARY)
 test: ## Run the full test suite (unit + integration)
 	go test ./...
 
-test-unit: ## Run unit tests only (presentation-free logic in internal/)
-	go test ./internal/...
+test-unit: ## Run unit tests only (presentation-free logic in internal/ + pkg/skillcore)
+	go test ./internal/... ./pkg/...
 
 test-integration: ## Run the quickstart acceptance suite (builds & execs the binary)
 	go test ./test/...

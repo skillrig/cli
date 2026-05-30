@@ -1,0 +1,110 @@
+[
+  {
+    "id": 1,
+    "name": "bind-repo-to-origin",
+    "description": "User asks to point a repo at the team's skills library — should reach for `skillrig init --origin OWNER/REPO` (project scope) and explain it lands at the git root.",
+    "prompt": "I want this repository to use our team's shared agent skills, which live at acme/agent-skills. How do I set that up with skillrig?",
+    "trap": "Model invents a non-existent command (e.g. `skillrig config set`), suggests editing config.toml by hand instead of `skillrig init`, or claims it scaffolds/creates the origin.",
+    "assertions": [
+      { "id": "1.1", "text": "Recommends `skillrig init --origin acme/agent-skills` (origin in OWNER/REPO form)" },
+      { "id": "1.2", "text": "Explains the project config is written at the git repository root (.skillrig/config.toml)" },
+      { "id": "1.3", "text": "Does NOT claim init creates/scaffolds the origin — it binds an existing one (consume-only)" }
+    ]
+  },
+  {
+    "id": 2,
+    "name": "ci-agent-non-interactive",
+    "description": "Automated/CI context — should pass --origin (or SKILLRIG_ORIGIN) AND --non-interactive so the command never blocks on a prompt.",
+    "prompt": "I'm running skillrig in CI where there's no terminal. How do I bind the origin so it never hangs waiting for input?",
+    "trap": "Model relies on TTY auto-detection alone, omits --non-interactive, or suggests piping input to the prompt instead of failing fast.",
+    "assertions": [
+      { "id": "2.1", "text": "Recommends passing --origin OWNER/REPO explicitly (or setting SKILLRIG_ORIGIN)" },
+      { "id": "2.2", "text": "Recommends --non-interactive to force fail-fast and never prompt, even if a TTY is present" }
+    ]
+  },
+  {
+    "id": 3,
+    "name": "no-origin-and-precedence",
+    "description": "User hits a 'no origin configured' error and asks how resolution works — should explain SKILLRIG_ORIGIN > project > global and the concrete fixes.",
+    "prompt": "A skillrig command failed with 'no origin configured'. How does skillrig decide which origin to use, and how do I fix this?",
+    "trap": "Model gets the precedence order wrong, forgets the SKILLRIG_ORIGIN env override, or omits the --global fallback option.",
+    "assertions": [
+      { "id": "3.1", "text": "States precedence SKILLRIG_ORIGIN > project .skillrig/config.toml > global config (highest wins)" },
+      { "id": "3.2", "text": "Offers concrete fixes: run `skillrig init --origin OWNER/REPO`, set SKILLRIG_ORIGIN, or set a --global default" },
+      { "id": "3.3", "text": "Notes the project config is found by walking up from the current directory (works from subdirectories)" }
+    ]
+  },
+  {
+    "id": 4,
+    "name": "track-a-branch",
+    "description": "User wants the repo to follow a specific branch of the skills library — should append @REF to the origin (OWNER/REPO@branch), not invent a separate flag.",
+    "prompt": "Our skills repo acme/agent-skills has a 'staging' branch we want to try before it merges. How do I point this repo at that branch with skillrig?",
+    "trap": "Model invents a non-existent flag (e.g. --branch/--ref), claims skillrig verifies the branch exists over the network, or conflates this with pinning an individual skill to a tag/SHA.",
+    "assertions": [
+      { "id": "4.1", "text": "Recommends `skillrig init --origin acme/agent-skills@staging` (the @REF suffix on the single --origin string)" },
+      { "id": "4.2", "text": "Does NOT invent a separate --branch/--ref flag; the ref rides inside the origin reference" },
+      { "id": "4.3", "text": "Notes the @REF is validated for shape only / offline — existence on the remote is not checked" }
+    ]
+  },
+  {
+    "id": 5,
+    "name": "vendor-a-skill-roundtrip",
+    "description": "User wants to pull a skill from their library into the repo — should reach for `skillrig add <skill>` and explain the vendor→commit→verify round-trip.",
+    "prompt": "Our team's skills library is already configured for this repo. I want to bring in the `terraform-plan-review` skill and make sure it's locked to exactly the approved version. How do I do that with skillrig?",
+    "trap": "Model invents a non-existent command (e.g. `skillrig install`/`skillrig pull`), suggests hand-editing the lock, copies files manually, expects a network fetch, or forgets you must commit before `verify`.",
+    "assertions": [
+      { "id": "5.1", "text": "Recommends `skillrig add terraform-plan-review` to vendor from the configured origin into .agents/skills/" },
+      { "id": "5.2", "text": "Explains the identity is recorded in .skillrig/skills-lock.json (version/commit/treeSha/path), not hand-authored" },
+      { "id": "5.3", "text": "Says to git-commit the vendored skill + lock, THEN run `skillrig verify` (verify checks committed content)" },
+      { "id": "5.4", "text": "Does NOT invent a path/`--from` argument or claim it fetches over the network (local, consume-only this release)" }
+    ]
+  },
+  {
+    "id": 6,
+    "name": "verify-integrity-only-not-prereq",
+    "description": "User suspects verify failed because a backing CLI is missing — should explain verify is integrity-only and a missing backing tool NEVER fails verify (prereq is a future doctor / reserved exit 3).",
+    "prompt": "`skillrig verify` is failing in CI and one of our skills declares it needs `terraform` and `oxid`, which aren't installed on the CI runner. Is the missing tool why verify fails, and should I install them to fix it?",
+    "trap": "Model claims verify checks prerequisites / that the missing tool causes the failure, tells the user to install the tools to fix verify, or conflates integrity (exit 2) with a prerequisite check (exit 3).",
+    "assertions": [
+      { "id": "6.1", "text": "States a missing backing tool does NOT cause a verify failure — verify is integrity-only (checks content, not runnability)" },
+      { "id": "6.2", "text": "Attributes prerequisite/eligibility checking to a future `doctor` (the reserved exit 3, never emitted by verify)" },
+      { "id": "6.3", "text": "Redirects to the real cause: a non-zero verify is mismatch/orphan/missing/dirty (exit 2) or a config problem (exit 1) — inspect with `skillrig verify --json`" }
+    ]
+  },
+  {
+    "id": 7,
+    "name": "ci-gate-exit-codes",
+    "description": "User wants to gate a merge on verify — should explain the stable exit codes (0 pass / 1 usage-config / 2 verification failure; 3 never) and branching, not prose parsing.",
+    "prompt": "I want our merge pipeline to block if any vendored skill has been tampered with. How do I wire `skillrig verify` into CI, and what exit codes do I branch on?",
+    "trap": "Model gets the exit codes wrong (e.g. verification failure as exit 1), suggests grepping the human text instead of the exit code or --json, claims a malformed lock is exit 2, or mentions exit 3 as something verify emits.",
+    "assertions": [
+      { "id": "7.1", "text": "Says exit 0 = pass (incl. empty), exit 2 = verification failure (mismatch/orphan/missing/dirty), exit 1 = usage/config (incl. malformed lock, not-a-git-repo)" },
+      { "id": "7.2", "text": "Recommends branching on the exit code (and/or --json), not parsing prose" },
+      { "id": "7.3", "text": "Notes a malformed/unreadable lock is exit 1 (distinct from a content failure 2), and exit 3 is never emitted by verify" }
+    ]
+  },
+  {
+    "id": 8,
+    "name": "divergent-overwrite-force",
+    "description": "User locally edited a vendored skill and re-adds the same version — should explain add refuses without --force (no silent clobber, no three-way merge) and how to proceed.",
+    "prompt": "I made some local tweaks to .agents/skills/terraform-plan-review, and now `skillrig add terraform-plan-review` is erroring with something about refusing to overwrite. What's going on and how do I get the original back?",
+    "trap": "Model claims `add` performs a three-way merge, tells the user to hand-edit the lock, suggests deleting the lock entry, or implies add will silently overwrite their edits.",
+    "assertions": [
+      { "id": "8.1", "text": "Explains add refuses because on-disk content diverges from the recorded fingerprint (never silently clobbers local edits)" },
+      { "id": "8.2", "text": "Says `skillrig add terraform-plan-review --force` overwrites with the origin's approved content (or revert the edits)" },
+      { "id": "8.3", "text": "Does NOT claim add three-way-merges (re-vendoring the same version has no upstream change to merge — that is a future `bump`)" }
+    ]
+  },
+  {
+    "id": 9,
+    "name": "dirty-vs-mismatch-verdict",
+    "description": "User gets a `dirty` verdict — should explain it means uncommitted/locally-modified (commit it), distinct from a content `mismatch`, because verify checks the committed tree.",
+    "prompt": "`skillrig verify --json` shows one of my skills with status `dirty` rather than `ok` or `mismatch`. I haven't changed the recorded version on purpose. What does dirty mean and how do I clear it?",
+    "trap": "Model conflates `dirty` with `mismatch`, tells the user the recorded fingerprint is wrong, or suggests editing the lock — instead of recognizing verify checks the COMMITTED tree and the working copy has uncommitted changes.",
+    "assertions": [
+      { "id": "9.1", "text": "Explains `dirty` = the vendored skill has uncommitted/locally-modified content (verify checks the committed tree)" },
+      { "id": "9.2", "text": "Says to commit the vendored files (or discard the local changes), then re-verify" },
+      { "id": "9.3", "text": "Distinguishes `dirty` from `mismatch` (mismatch = committed content differs from the record) and does NOT suggest editing the lock" }
+    ]
+  }
+]

@@ -1,0 +1,23 @@
+# Per-skill machine-facing manifest. Vendors with the skill into consumer repos.
+name        = "terraform-plan-review"
+version     = "1.4.0"
+namespace   = "my-org"
+description = "Review a terraform plan for risk and drift."
+
+# Deterministic discovery tags.
+tags = ["platform-team", "terraform", "aws"]
+
+# Backing-CLI prerequisites: DECLARED, not installed. These tools are absent in
+# the test environment on purpose — verify is integrity-only and MUST NOT check
+# them (SC-006/FR-014), so a pass with these present still exits 0.
+[[requires]]
+tool    = "oxid"
+version = ">=0.4.0"
+source  = "my-org/my-skills"
+manager = "mise"
+
+[[requires]]
+tool    = "terraform"
+version = ">=1.6"
+source  = "hashicorp/terraform"
+manager = "mise"
