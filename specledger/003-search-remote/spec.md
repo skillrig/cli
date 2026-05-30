@@ -22,7 +22,18 @@ Remote acquisition is **additive**: vendoring from a local copy of the library (
 
 ## Clarifications
 
-This specification intentionally leaves seven decisions open for `/specledger.clarify`; they are enumerated in [spec-tech.md](./spec-tech.md) ("Open Decisions"). Each is recorded here as a documented **assumption** (see [Assumptions](#assumptions)) so the spec is internally consistent, with the note that `/clarify` may revise it. None of the seven changes the user-visible *goals* below; they shape *how* the goals are met.
+The specify phase left seven decisions open (enumerated in [spec-tech.md](./spec-tech.md) "Open Decisions"). The clarify session below resolved them into **two firm decisions** and **four research spikes**: the reviewer judged four areas (skill-manifest format, catalog generation/lifecycle, authentication, and remote-git testing) as carrying enough uncertainty that committing now would risk downstream rework — so they are routed to time-boxed spikes *before* `/specledger.plan`. The remaining assumptions (see [Assumptions](#assumptions)) stand unless a spike revises them.
+
+> **Readiness:** because four spikes are outstanding, this feature is **not yet plan-ready**. Run the spikes (see [spec-tech.md](./spec-tech.md) "Spike backlog"), fold their findings back into spec-tech.md, then re-run `/specledger.clarify` or proceed to `/specledger.plan`.
+
+### Session 2026-05-31
+
+- Q: How should 003 treat the skill manifest format (`skill.toml` vs the agentskills.io frontmatter + `metadata` standard the catalog is built from)? → A: **Spike before deciding** — compare `skill.toml` vs agentskills.io frontmatter + `metadata` namespacing (e.g. `skillrig.dev/requires`), toml/yaml fragility, and how the Go `gh` CLI parses frontmatter; lock the catalog field-source only after. (Spike S1)
+- Q: Who generates and maintains the catalog `search` reads, and is that in 003's scope? → A: **Spike the catalog lifecycle first** — generation, cross-ref tag aggregation across origin refs, append-only vs full regenerate, and garbage-collection — because it strongly shapes how indexing works; scope the generation work after. (Spike S2)
+- Q: Does the tool ever create/cache a local copy of a *remote* origin? → A: **No.** Acquisition fetches from the GitHub `OWNER/REPO`. A "local origin" exists **only** when the user configures a local filesystem path via `init` (and as a test fixture); there is no tool-managed cache and no "prefer local copy when both present" rule. (Confirmed against the 002 code: 002 overloaded `OWNER/REPO` as a directory `<consumerRepoRoot>/OWNER/REPO` and ran `git` directly on that working tree — it never used `file://` or a remote. 003 splits the two forms: an explicit local path vs a remote `OWNER/REPO`.) This supersedes assumption A1 and aligns with fetch-catalog-per-search.
+- Q: How is authentication to a private origin handled this slice? → A: **Spike mise's token-resolution path** (mise is open-source Rust — clone to a temp dir to study it) and the already-checked-out Go `gh` CLI source (`/Users/vincentdesmet/specledger/skillrig/gh-cli`); use `os.exec` of `gh`/`git` for the token, **not** `gh`-as-a-library (too heavy); defer GitHub Enterprise hosting to the roadmap/backlog. (Spike S3)
+- Q: When a skill is acquired at a pin (tag/ref), what is recorded in the lock? → A: **commit + treeSha + the resolved human-readable version/tag** — provenance (commit) and label-honesty (treeSha) for the machine, plus the version/tag (even if later rewritten upstream) so humans can reason about older/newer.
+- Q: How are the network-failure FRs (auth / unreachable / transient) tested, given 002 used a local git working tree with no `file://` and no remote? → A: **Spike remote-git testing** — `file://` (or a local bare repo) for the happy/integrity fetch path, plus `httptest` or a fault-injection seam for the network-error FRs that `file://` cannot reproduce; decide the seam before planning. (Spike S4)
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -118,15 +129,15 @@ When acquisition or discovery cannot proceed, the developer (or their agent) get
 
 - **FR-006**: Users MUST be able to vendor a published skill directly from the **remote** library with a single `add` command, with **no** pre-existing local copy of the library required.
 - **FR-007**: Vendoring MUST place the skill's content in the repo identical to what the library holds for the acquired version.
-- **FR-008**: Vendoring MUST record the skill's exact identity — which version, where it came from, and a content fingerprint — such that the existing `verify` command can later confirm the on-disk content matches what was recorded.
+- **FR-008**: Vendoring MUST record the skill's exact identity — its provenance (the exact source point it came from), a content fingerprint, **and** the human-readable version/tag it resolved to — such that the existing `verify` command can later confirm the on-disk content matches what was recorded, and a human can reason about which version they have (older/newer) without decoding the provenance.
 - **FR-009**: Re-vendoring a skill that is already present at the same version and content MUST be a safe no-op that reports "already up to date" and changes nothing.
 - **FR-010**: Re-vendoring a skill whose local content has diverged MUST refuse to silently overwrite, and MUST tell the user how to force the overwrite — consistent with the behavior when vendoring from a local copy.
-- **FR-011**: Vendoring from a **local copy** of the library MUST continue to work unchanged (remote acquisition is additive, not a replacement); the tool MUST behave predictably and tell the user which source was used when both a local copy and a remote are available.
+- **FR-011**: Vendoring from a **local-path library** MUST continue to work unchanged (remote acquisition is additive, not a replacement). A "local library" exists **only** when the user has explicitly configured a local filesystem path as the origin; the tool MUST NOT create or maintain a local copy of a *remote* library on the user's behalf, and there is therefore no "both present" precedence to resolve — the origin is either an explicit local path or a remote `OWNER/REPO`, and the tool reports which form it used.
 - **FR-012**: Requesting a skill the library does not publish MUST report "not found in the library" with guidance to discover the correct name (e.g. run `search`), and MUST be distinct from reaching/auth failures.
 
 **Reproducible pinning (`add`)**
 
-- **FR-013**: Users MUST be able to vendor a skill pinned to a specific, immutable released version, and that exact identity MUST be recorded.
+- **FR-013**: Users MUST be able to vendor a skill pinned to a specific released version, and that exact identity MUST be recorded — including both the immutable provenance the pin resolved to and the human-readable version/tag of the pin itself (per FR-008).
 - **FR-014**: Vendoring the same skill at the same pin on a clean repo MUST reproduce byte-identical content with the same recorded identity.
 - **FR-015**: Pinning to a version that does not exist MUST be reported as an actionable "no such version," distinct from "skill not found."
 
@@ -150,21 +161,21 @@ When acquisition or discovery cannot proceed, the developer (or their agent) get
 
 ### Key Entities *(include if feature involves data)*
 
-- **Library (origin)**: the org's source-of-truth repository of skills, identified by `OWNER/REPO` with an optional branch/ref, already resolvable by the tool. May be reached remotely or via a local copy.
+- **Library (origin)**: the org's source-of-truth repository of skills, already resolvable by the tool. It takes one of two forms: a **remote** library identified by `OWNER/REPO` with an optional branch/ref (fetched over the network), or a **local-path** library the user explicitly configured as a filesystem path. The tool never silently converts one into the other.
 - **Library catalog**: the library's published, machine-readable list of available skills — each entry carrying at least name, version, description, and topics — plus the format/compatibility marker the tool checks. The basis for `search`. Discovery-only: it does not itself carry per-skill fingerprints.
 - **Skill**: a named, versioned unit of agent instruction content vendored into the consumer repo.
 - **Topic (tag)**: a deterministic label attached to a skill in the catalog, used to filter discovery. Data only; no inferential matching.
-- **Pin**: an explicit, immutable version reference used at acquisition time to make the result reproducible (distinct from the library's moving branch pointer).
-- **Identity record (lock entry)**: the per-skill record written at acquisition time — version, source/provenance, and content fingerprint — that `verify` later checks. Unchanged in shape from 002; this slice writes it from a remote source.
+- **Pin**: an explicit version reference (a tag/release) used at acquisition time to make the result reproducible (distinct from the library's moving branch pointer). The pin resolves to an immutable provenance point, and both the provenance and the human-readable pin are recorded.
+- **Identity record (lock entry)**: the per-skill record written at acquisition time — the resolved version/tag, source/provenance, and content fingerprint — that `verify` later checks. Extends 002's shape with the human-readable version/tag alongside the provenance; this slice can write it from a remote source.
 
 ## Assumptions
 
-These are reasonable defaults adopted so the spec is internally consistent. Each corresponds to an open decision deferred to `/specledger.clarify` (full detail and alternatives in [spec-tech.md](./spec-tech.md) §8); `/clarify` may revise any of them. None changes the user-visible goals.
+These are reasonable defaults adopted so the spec is internally consistent. After the 2026-05-31 clarify session, A1 is **settled** (no longer an assumption — see Clarifications) and A4 is **pending Spike S3**; the rest stand unless a spike revises them. Full detail in [spec-tech.md](./spec-tech.md).
 
-- **A1 — Local vs remote source (FR-006, FR-011)**: when both a local copy of the library and a remote are available, the tool prefers the local copy and names which source it used; a bare `OWNER/REPO` with no local copy is fetched remotely. The selection is deterministic and visible to the user.
-- **A2 — Discovery freshness**: `search` reflects the library's current published catalog at run time; if the library cannot be reached, `search` reports an unreachable failure rather than serving a stale result (no offline cache assumed in this slice).
+- **A1 — Local vs remote source (FR-006, FR-011) — SETTLED 2026-05-31**: the origin is *either* a remote `OWNER/REPO` (fetched) *or* an explicitly-configured local filesystem path; the tool never creates or caches a local copy of a remote, so there is no "both present" precedence. (Supersedes the original "prefer the local copy" wording.)
+- **A2 — Discovery freshness**: `search` reflects the library's current published catalog at run time; if the library cannot be reached, `search` reports an unreachable failure rather than serving a stale result (no offline cache this slice). Confirmed: fetch the catalog per `search` call.
 - **A3 — Topic filtering**: multiple topics narrow the result (a skill must carry all requested topics to match); matching is exact-string and case-sensitive on the catalog's labels, with no relevance ranking.
-- **A4 — Authentication**: the tool reuses the user's existing standard credentials for reaching the library (the same mechanism already required to clone private org repos); it introduces no credential of its own and stores nothing.
+- **A4 — Authentication — PENDING Spike S3**: the tool reuses the user's existing standard credentials for reaching the library (the same mechanism already required to clone private org repos) via `os.exec` of `gh`/`git`; it introduces no credential of its own and stores nothing. The exact token-resolution path is the subject of Spike S3.
 - **A5 — Reproducibility anchor**: the recorded content fingerprint proves the on-disk content still matches what was vendored from the library at a specific provenance point; it is not an independently library-attested hash (the library does not publish per-skill fingerprints in its catalog).
 - **A6 — Identity/lock shape**: the per-skill identity record keeps the same shape established in 002; this slice only changes that the content can originate remotely.
 
