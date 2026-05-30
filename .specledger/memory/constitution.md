@@ -133,6 +133,17 @@ Use the `skill-creator` skill at `.claude/skills/skill-creator/` to test trigger
 accuracy and run evals (`scripts/run_eval.py`) after changes. A feature is not
 complete until its skill coverage is verified.
 
+**One consolidated skill, not one-per-command.** There is a SINGLE user-facing
+agent skill for the whole CLI — `.agents/skills/skillrig/` — with a short root
+`SKILL.md` (what it is, when to use it, the `init`→`add`→`verify` workflow, the
+origin precondition) that routes to per-activity detail under `references/`
+(one file per command/activity, e.g. `init.md`/`add.md`/`verify.md`). A new
+command extends this skill (a new `references/<cmd>.md` + the root's routing table
+and description keywords), it does NOT spawn a new top-level `skillrig-<cmd>`
+skill. Progressive disclosure (skill-creator's domain-organization pattern) keeps
+the root grokkable while the references carry depth; splitting per command
+fragments triggering and duplicates the shared workflow/precondition guidance.
+
 This is doubly load-bearing here: **undertriggering** — an agent failing to invoke
 a skill when it should — is a documented failure mode that skillrig itself exists
 to fight (it is the rationale behind the origin's `lint` conformance gate, cli.md /
