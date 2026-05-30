@@ -84,7 +84,7 @@ A security-conscious reviewer worries about a skill that was added to the repo w
 
 1. **Given** a skill directory present in the repo's skills location with no corresponding record entry, **When** verify runs, **Then** it exits with the verification-failure status and identifies the untracked (orphan) skill.
 2. **Given** a record entry for a skill whose files are absent from the repo, **When** verify runs, **Then** it exits with the verification-failure status and identifies the missing skill.
-3. **Given** the repo uses per-client compatibility views (alternate directory entries pointing at the same canonical skill content), **When** verify runs, **Then** those views are not miscounted as separate or untracked skills.
+3. **Given** multi-client compatibility views are **not** created by this feature (deferred — see Out of Scope and FR-011), **When** verify runs, **Then** the orphan/completeness check scans only the canonical skills location (`.agents/skills`); robust handling of any manually-created view directories is deferred together with multi-client materialization.
 4. **Given** both a content mismatch (US2) and an untracked skill are present, **When** verify runs, **Then** it fails and reports both classes of problem rather than stopping at the first.
 
 ---
@@ -123,7 +123,7 @@ An automated caller — a CI merge gate or an agent deciding its next step — n
 
 **Vendoring a skill (`add`)**
 
-- **FR-001**: The system MUST provide a command that vendors a named skill from the repo's **configured origin** (resolved via the shared origin resolver — there is no separate source argument that bypasses it; the origin may be a local checkout) into the canonical skills location (`.agents/skills/<skill>`) and records its identity. Both this command and verification MUST run inside a git repository.
+- **FR-001**: The system MUST provide a command that vendors a named skill from the repo's **configured origin** (resolved via the shared origin resolver — there is no separate source argument that bypasses it; the origin may be a local checkout) into the canonical skills location (`.agents/skills/<skill>`) and records its identity. For this **project-scope** feature, both this command and verification MUST run inside a git repository (the canonical `.agents/skills` location lives at the repo root). A future **global** scope (`--global`, materializing into the user's home `~/.agents/skills`, which is not a repo) is a separate, deferred carve-out — see Out of Scope — and will **not** be bound by this project-scope requirement.
 - **FR-002**: For each vendored skill, the system MUST record its version, its provenance (where it came from), and a content fingerprint that uniquely reflects the skill's content.
 - **FR-003**: The vendor command MUST be idempotent: re-vendoring identical content leaves an equivalent result and reports success without error.
 - **FR-004**: The vendor command MUST NOT silently overwrite vendored content that diverges from the recorded fingerprint; it MUST detect the divergence and require an explicit override (`--force`) so local modifications are never lost without intent. It MUST NOT attempt a three-way merge — re-vendoring the same version has no upstream-advance axis to merge; that is a later `bump` concern.
@@ -134,7 +134,7 @@ An automated caller — a CI merge gate or an agent deciding its next step — n
 **Verifying vendored skills (`verify`)**
 
 - **FR-008**: The system MUST provide a verification command that checks the repo's vendored skills against their recorded identities, entirely offline and deterministically (same inputs always yield the same result; no network or external/live signal).
-- **FR-009**: Verification MUST recompute each recorded skill's content fingerprint from its current on-disk content and compare it to the recorded value, failing when they differ (label honesty).
+- **FR-009**: Verification MUST recompute each recorded skill's content fingerprint from its **committed** on-disk content and compare it to the recorded value, failing when they differ (label honesty). A vendored skill with **uncommitted** local modifications MUST be surfaced as a **distinct** finding (a "dirty" verdict — "commit it / it has local modifications"), never silently passed nor conflated with a content mismatch.
 - **FR-010**: Verification MUST compare the set of skills present on disk against the set of recorded skills, failing when a skill is present but unrecorded (untracked/orphan) or recorded but absent (missing) — covering the whole set, not only recorded entries.
 - **FR-011**: Verification's orphan/completeness check MUST scan the canonical skills location (`.agents/skills`). This feature does not create per-client symlink views; robust handling of such views is deferred together with multi-client materialization (see Out of Scope).
 - **FR-012**: Verification MUST report *all* detected problems in a run (e.g. both a content mismatch and an untracked skill), not stop at the first.
@@ -153,7 +153,7 @@ An automated caller — a CI merge gate or an agent deciding its next step — n
 - **FR-019**: Every error MUST state (a) what failed, (b) the real underlying reason (never swallowed), and (c) at least one concrete suggested fix; a verbose mode MUST expose the raw underlying cause.
 - **FR-020**: Diagnostic output MUST go to the error stream and primary data to the standard output stream, so output can be cleanly piped.
 - **FR-021**: The system MUST offer a machine-readable output mode whose output is complete (every checked skill with a per-skill verdict; no truncation) and parseable, for both passing and failing runs.
-- **FR-022**: The system MUST use distinct, stable exit statuses: success; usage/config error (bad arguments, malformed record, not in a version-controlled repo); and verification failure (content mismatch or untracked/missing skill). The prerequisite-failure status is reserved and MUST NOT be emitted by this feature's commands.
+- **FR-022**: The system MUST use distinct, stable exit statuses: success; usage/config error (bad arguments, malformed record, not in a git repo); and verification failure (content mismatch, untracked/missing skill, **or an uncommitted/locally-modified vendored skill**). The prerequisite-failure status is reserved and MUST NOT be emitted by this feature's commands.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -161,7 +161,7 @@ An automated caller — a CI merge gate or an agent deciding its next step — n
 - **Skill manifest**: the per-skill machine-readable description (name, version, namespace, description, discovery tags, declared backing-tool prerequisites) — vendored on disk as part of the skill subtree. Read at vendor time for identity. Its prerequisite declarations are **neither copied into the record nor evaluated** in this feature; the vendored manifest itself is the single source of truth for them (a later health command reads it directly).
 - **Skill record (lock)**: the committed file (`.skillrig/skills-lock.json`) mapping each vendored skill to its recorded version, provenance (origin + commit), content fingerprint, and location. It does **not** duplicate the skill's backing-tool prerequisites (those live in the vendored manifest). Written by vendoring, read by verification; the source of truth for "what was approved."
 - **Content fingerprint**: a value that uniquely reflects a skill's content as published for a given version. Used for *label honesty* — confirming on-disk content matches the version it claims to be. Computed identically at vendor time and verify time.
-- **Verification verdict**: the outcome of verification — overall pass/fail plus a per-skill result (matched / content-mismatch / untracked / missing), surfaced both compactly for humans and completely for machines.
+- **Verification verdict**: the outcome of verification — overall pass/fail plus a per-skill result: **matched** (`ok`), **content-mismatch** (`mismatch`), **untracked** (`orphan`), **missing**, or **uncommitted/modified** (`dirty`) — surfaced both compactly for humans and completely for machines. (Parenthised names are the machine field values used in `--json`.)
 
 ## Out of Scope
 
@@ -173,13 +173,14 @@ The following are explicitly **not** part of this feature and MUST NOT be pulled
 - **Discovery** (`index.json`, search) and any browse UI.
 - **Multi-client symlink materialization & agent-shell selection** — creating per-client view directories (e.g. `.claude/skills → ../.agents/skills`) and the `init`-time agent-shell selection stored in `.skillrig/config.toml`. `add` writes only the canonical `.agents/skills`; verification scans only that location. A separate, later feature.
 - **External-source allowlists, audit classification, and risk/vulnerability surfacing** — later governance work.
+- **Global-scope skills** (`--global` / a future `global add` / `global verify` materializing into the user's home `~/.agents/skills`) — a separate, later tier; this feature is **project-scope only**. Global targets are **not** git repos, so the git-repo requirement here is project-scope-specific, and global `verify` will need a non-repo fingerprint mechanism (recorded as a future concern in the spike).
 - **Any authentication or credential handling.**
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: A user can vendor a skill from a local library and verify it in two commands, with zero network access and no hand-authored records.
+- **SC-001**: A user can vendor a skill from a local library, commit it, and verify it — the vendor→commit→verify round-trip — with zero network access and no hand-authored records. (Verification checks committed content, so the commit is part of the loop.)
 - **SC-002**: When a vendored skill's content matches its record, verification passes (success status); when any skill's content diverges from its record, verification fails with the verification-failure status — correct for 100% of label-honesty cases.
 - **SC-003**: A single altered byte in any vendored skill file is detected as a content mismatch — 0 false negatives; and when multiple skills are altered, all are reported in one run (the check never exits on the first failure).
 - **SC-004**: Any on-disk skill with no record entry (untracked) and any recorded skill absent on disk (missing) are both detected and fail the gate.
@@ -201,7 +202,7 @@ The following are explicitly **not** part of this feature and MUST NOT be pulled
 **Assumptions**:
 
 - The repo is pointed at its origin via `init` (feature 001); for this feature the resolved origin is a **local** source (a local checkout). `add` consumes the *resolved* origin — there is no separate source argument that bypasses it. Remote fetch is additive future work.
-- Both `add` and `verify` require being run inside a **git repository**: the canonical skills location and the content fingerprint both derive from the repo's git content model, so running outside one is a usage/config error.
+- Both `add` and `verify` (this **project-scope** feature) require being run inside a **git repository**: the canonical skills location and the content fingerprint derive from the repo's git content model, so running outside one is a usage/config error. The deferred **global** scope (`--global` → user home, not a repo) is explicitly *not* bound by this (see Out of Scope).
 - Skills are vendored into the repo under version control, so the repo's own content model carries file integrity; the recorded fingerprint adds *label honesty* (content matches its claimed version) on top of that.
 - `add` requires the origin to be configured (it resolves it to know what to vendor); `verify` does **not** (it reads the committed record and on-disk content). The skill record file and the per-skill manifest are separate concerns from the origin config of the first slice.
 

@@ -333,6 +333,23 @@ Verified against mise's GitHub backend docs (current as of early 2026). Three fi
 
 ---
 
+## 9c. Federated skill registries — external origin types (skills.sh, AWS AgentRegistry)
+
+**Status:** Evolution beyond v0 (roadmap 011/012); built on 002's `skillcore` + the §9b allowlist/canon. Recorded so the integrity model stays coherent when skills come from somewhere other than the org's git origin.
+
+**The default origin stays git** (§2c, §4.2): the org's monorepo is the source of truth and the integrity gold standard (git tree-SHA label-honesty). Federated registries are **additional, governed external source types** consumed through the **canon's allowlist** (§9b) — *not* replacements — and **skillrig still operates no registry service of its own** (§2b unchanged; it *consumes* registries, never hosts one). Two are on the roadmap:
+- **Public — skills.sh (Vercel).** Community skills, vetted by the registry's **usage statistics + audit reports**. Adopted only when **allowlisted in the origin's `policy.toml`** (§9b graded allowance: blocked / advisory / approved / pinned-version-only), and flagged with warnings when advisory.
+- **Private — AWS AgentRegistry (enterprise).** A governed, IAM/OAuth-gated catalog as an external source for AWS-centric orgs.
+
+**Integrity reconciliation (the key alignment — the git-origin coupling, §4.2).** A registry is **not a git repo**, so there is **no origin-published git tree-SHA** to compare against. The fingerprint therefore **forks by source type**, with `skillcore` owning both (one implementation, AP-04):
+- **git origin** → the **git tree-SHA** (origin-attested label-honesty, §4.2) — unchanged; the strongest guarantee.
+- **registry source** → a **content digest** recorded at vendor time (the registry's published digest, or one recomputed from the fetched bytes); `verify` recomputes it offline and compares, exactly as it does the tree-SHA. This proves *the content has not changed since vendoring* — but **not** *origin-attested-against-a-git-tree* (a registry cannot offer that). The **canon's allowlist + the registry's audit/usage signals** carry the "reviewed/approved" half instead.
+- Either way `verify` stays **offline + deterministic** (recompute the recorded fingerprint). The registry's **live risk / audit / usage scores are advisory, human-facing, online-only** (§9b / R29) — surfaced by `doctor`/`add`, **never** in `verify` (N6: truth stays deterministic).
+
+**Net:** the lockfile generalizes from "git tree-SHA + commit" to a **typed fingerprint per source** (`gitTreeSha` for git origins, `digest` for registries) without weakening the offline `verify` gate; governance moves to the canon's allowlist + each registry's own provenance/audit signals. The git origin remains the default and the highest-integrity path.
+
+---
+
 ## 10. What we deliberately did *not* build (maps to requirements §5)
 
 - **Team→skill suggestion engine (D1):** tags ship in the manifest now (R24); the suggestion UX is v1. Any future suggestion layer reads tags deterministically and stays additive — truth never moves into an LLM/inferential component (N6). `doctor` can already deterministically list "skills tagged `<your-team>` not present in your global scope" without any inference — that may be enough to make the v1 "engine" unnecessary.

@@ -1,7 +1,7 @@
 # Contract: `skillrig verify`
 
 **Pattern**: Verification Gate — [cli.md](../../../docs/design/cli.md) Pattern Classification. MUST be offline + deterministic, exit-code driven, **no online/inferential signal** (AP-02). Read-only.
-**Purpose**: Prove the repo's vendored skills are exactly what was recorded — **label-honesty** (tree-SHA) + **orphan/completeness** (on-disk set = locked set). Integrity only; **no** prerequisite check (that is `doctor`; exit `3` not emitted). Requires a git repository; needs no origin and no network.
+**Purpose**: Prove **this repository's** vendored skills (**project scope** — `.agents/skills` checked against the committed `.skillrig/skills-lock.json`) are exactly what was recorded — **label-honesty** (tree-SHA) + **orphan/completeness** (on-disk set = locked set). Integrity only; **no** prerequisite check (that is `doctor`; exit `3` not emitted). **Project-scope**: it verifies the current repo, *not* global/user-scope skills. Requires a git repository; needs no origin and no network.
 
 ## Synopsis
 
@@ -15,9 +15,17 @@ skillrig verify [--json] [--verbose]
 
 ## Help (Progressive Discovery)
 
+The cobra `Short`/`Long`/`Example` MUST state project scope (other code/test readers never see this spec — the help text is where "project-level" must live):
+
 ```
+Short: Check THIS repo's vendored skills match their recorded versions (project scope)
+Long:  verify checks the PROJECT's vendored skills (.agents/skills) against the
+       committed lock (.skillrig/skills-lock.json) — label-honesty (git tree-SHA)
+       + orphan/completeness — offline and deterministic. PROJECT-SCOPE: it verifies
+       THIS repository, not global/user-scope skills. Exit 0 ok / 1 usage / 2 failure.
+
 Examples:
-  # Verify every vendored skill matches its recorded version (CI gate)
+  # Verify this repo's vendored skills match their recorded versions (project-scope CI gate)
   skillrig verify
 
   # Machine-readable per-skill verdicts for an agent / jq

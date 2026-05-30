@@ -29,20 +29,21 @@ resolver — AP-04 / AP-06) and layers thin commands on top.
 | # | Feature branch | Pattern | Depends on | Status |
 |---|----------------|---------|------------|--------|
 | 001 | **`init` + origin resolution** — `env SKILLRIG_ORIGIN > .skillrig/config.toml > ~/.config/skillrig/config.toml`; `skillrig init [--origin] [--global]` binds an existing origin (never bootstraps) | Environment | — (project skeleton) | 🚧 |
-| 002 | **`skillcore` + `verify`** — git tree-SHA + `skill.toml` manifest parse; offline label-honesty + orphan check; exit codes 0/2/3 | Verification Gate | 001 | ⬜ |
+| 002 | **`skillcore` + `add` (local) + `verify`** — git tree-SHA + `skill.toml` parse; **local-origin** `add` (vendor subtree + lock; `--dry-run`/`--force`); offline label-honesty + orphan check; **exit codes 0/1/2** (exit 3 → `doctor`/005) | Vendor Mutation + Verification Gate | 001 | ⬜ |
 | 003 | **`search`** — read origin (branch aware) committed `index.json`, deterministic tag filter, Two-Level Output | Query | 001 | ⬜ |
-| 004 | **`add`** — vendor a skill subtree + write lock entry; `--dry-run`, refuse-clobber-without-`--force` | Vendor Mutation | 002 | ⬜ |
+| 004 | **`add` — remote origin fetch** — network fetch from a GitHub-hosted origin (partial-clone + sparse-checkout) + auth; `@ref`/`--pin` immutable pins (local-origin `add` already shipped in 002) | Vendor Mutation | 002 | ⬜ |
 | 005 | **backing-CLI prereqs** — `[[requires]]` declare + verify (`--eligible`-style readiness, auth-as-distinct-failure R18); mise consumption via per-CLI tagged releases + template-generated `mise.toml` | (extends verify/doctor) | 002 | ⬜ |
 | 006 | **`doctor`** — superset health check (integrity + prereqs + auth) | Environment | 002, 005 | ⬜ |
 | 007 | **`bump --pr`** — detect upstream advance, drift-aware three-way-merge, open reviewable PR (conflict markers + non-zero exit on conflict) | Vendor Mutation | 002, 004 | ⬜ |
 | 008 | **`global add` / `global verify`** — fetch/restore user-scope skills against the global lock | Global Management | 002 | ⬜ |
 | 009 | **multi-client materialization** — canonical `.agents/skills` + symlink views, copy-fallback (Windows/CI) | (supports add/global) | 004 | ⬜ |
 | 010 | **`lint`** — author-side conformance gate, required PR check on the origin | Verification Gate | 002 | ⬜ |
-| 011 | **`aws`** — support AWS AgentRegistry hosted skills | Evolution | 002 | ⬜ |
+| 011 | **`skills.sh`** — support Vercel's skill.sh hosted skills. External skill adoption workflow (federated skill registries, whitelisted in origin, origin policy provisions for approval/review (skills.sh are evaluated on their usage statistics and audit reports, they should vetted or flagged with warnings)) | Evolution | 002 | ⬜ |
+| 012 | **`aws`** — ENTERPRISE - support Private AWS AgentRegistry hosted skills | Evolution | 002 | ⬜ |
 
 **Cross-cutting v0 commitments** (architecture §13):
 - Two scopes only — project (vendored, verify-only) + global (fetch/restore). **No "shared" middle tier.**
-- Lockfile carries `commit` (provenance) + `treeSha` (label honesty) + `requires` (§4.2); `.skillrig/config.toml` (input) split from `.skillrig/skills-lock.json` (output) (§2d).
+- Lockfile carries `commit` (provenance) + `treeSha` (label honesty); the per-skill **manifest** (not the lock) carries `[[requires]]` — the vendored manifest is the single source of truth (002 D4; reconciles §4.2). `.skillrig/config.toml` (input) split from `.skillrig/skills-lock.json` (output) (§2d).
 - Origin = git; **no auth of its own** (§2d).
 - One **batteries-included GitHub template** (skills + Go-monorepo backing-CLI pattern + index/lint/release workflows) (§2d).
 - Discovery via committed `index.json`; **deterministic tags ship in the manifest** (data only) (§9).

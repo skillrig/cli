@@ -68,7 +68,7 @@ Keys always present: `ok, name, version, path, commit, treeSha, action, dryRun`.
 | No origin configured | 1 | what: no origin configured; why: no `SKILLRIG_ORIGIN` / project / global origin; fix: `skillrig init --origin OWNER/REPO` or set `SKILLRIG_ORIGIN`. |
 | Skill not found in origin | 1 | what: skill `<name>` not found in origin; why: no `skills/<name>/` at `<origin>@<ref>`; fix: check the name / `skillrig search` (future). |
 | Divergent content, no `--force` | 1 | what: refusing to overwrite `<path>`; why: on-disk content diverges from the recorded fingerprint; fix: re-run with `--force`, or revert local edits. |
-| Not inside a git repo | 1 | what: not a git repository; why: tree-SHA + provenance need git; fix: run inside the repo (or `git init`). |
+| Not inside a git repo (project scope) | 1 | what: not a git repository; why: project-scope `add` places `.agents/skills` at the repo root and writes a lock that `verify` checks against git; fix: run inside the repo (or `git init`). _(A future `--global` path is exempt — see spec Out of Scope.)_ |
 
 Exit `0` on success (incl. idempotent no-op and `--dry-run`). Code `2` is `verify`'s; `3` is reserved (`doctor`).
 

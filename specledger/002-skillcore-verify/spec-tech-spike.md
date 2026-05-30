@@ -118,6 +118,7 @@ Two checks, both exit-2 class on failure:
 - `bump` (upstream advance, 3-way merge) + conflict-marker detection.
 - Network/git **fetch** in `add`; origin-resolution-driven `add`; `@ref`/`--pin` immutable pins; **auth for remote `add`** (PAT/SSH/registry token — see §11 OQ-2).
 - `index.json` / `search`; multi-client symlink materialization (§6); allowlist/audit (§9b, v1); auth (R18).
+- **Global scope** (`--global` / `global add` / `global verify` → `~/.agents/skills`). Two forward concerns surfaced 2026-05-30 (scope, don't solve, this slice): **(a) `add --global` target is non-git** — the project-scope "add requires a git repo" precondition must be **scoped to project mode**, not applied to the global path (home is not a repo), or it would wrongly reject `add --global`. **(b) `verify --global` cannot use committed-tree + shell-`git`** (D1/D2) — there is no `HEAD` at home, so the global tier needs a **working-tree fingerprint** (the in-process / temp-index hash set aside in D1), reopening that option for global only. Neither affects this project-scope slice; both are inputs to a future global-scope spec.
 
 ---
 

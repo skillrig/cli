@@ -43,7 +43,7 @@ Per Constitution II, **each scenario below maps 1:1 to a `TestQuickstart_<name>`
 
 ### TestQuickstart_AddNotGitRepo
 - **When** `skillrig add …` in a non-git tmpdir (origin via `SKILLRIG_ORIGIN`).
-- **Then** exit `1`; what: `not a git repository`; why: `tree-SHA + provenance need git`; fix: `run inside the repo`.
+- **Then** exit `1`; what: `not a git repository`; why: `project-scope add vendors into the repo's canonical .agents/skills and writes a lock that verify checks against git`; fix: `run inside the repo (or git init first)`. (Project-scope precondition — a future --global path is exempt; see spec Out of Scope.)
 
 ---
 
@@ -53,6 +53,12 @@ Per Constitution II, **each scenario below maps 1:1 to a `TestQuickstart_<name>`
 - **Given** `terraform-plan-review` vendored **and committed**.
 - **When** `skillrig verify`.
 - **Then** exit `0`; human exactly 2 lines (`verified 1 skills ✓` + `→ all match their recorded version`); `--json ok==true`, `counts.verified==1`, one verdict `status=="ok"` whose `expectedTreeSha==actualTreeSha==` the ground-truth tree-SHA.
+- **And (FR-014 / SC-006)**: the vendored skill declares `[[requires]]` (oxid, terraform) for tools **absent** in the test environment, yet verify still exits `0` — proving it performs **no** prerequisite check (integrity-only).
+
+### TestQuickstart_VerifyIsReadOnly  (FR-015)
+- **Given** `terraform-plan-review` vendored + committed.
+- **When** `skillrig verify` (pass) and again after a tamper (fail).
+- **Then** in **both** runs the working tree is **unchanged** — assert `git status --porcelain` is identical before/after, and `.skillrig/skills-lock.json` + the skill files are byte-for-byte untouched (verify writes nothing).
 
 ### TestQuickstart_VerifyDetectsTamper  (US2.2, SC-003)
 - **Given** the skill vendored + committed; then one byte of `SKILL.md` changed **and committed**.
@@ -102,6 +108,10 @@ Per Constitution II, **each scenario below maps 1:1 to a `TestQuickstart_<name>`
 - **Given** a `.skillrig/skills-lock.json` that is not valid JSON (or wrong `lockfileVersion`).
 - **When** `skillrig verify`.
 - **Then** exit `1` (usage/config, **distinct** from verification failure `2`); 3-part error naming the file + raw cause under `--verbose`; **not** a raw parser dump.
+
+### TestQuickstart_AddHelpExamples / TestQuickstart_VerifyHelpExamples  (FR-018 / SC-009)
+- **When** `skillrig add --help` and `skillrig verify --help`.
+- **Then** exit `0`; each help output contains a one-line purpose **and ≥2 usage examples** (assert ≥2 lines beginning `skillrig add `/`skillrig verify ` in the Examples block) — sufficient to construct a correct invocation without external docs. (Output-shape, not a single `Contains`.)
 
 ---
 

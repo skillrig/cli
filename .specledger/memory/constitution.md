@@ -57,7 +57,7 @@ verbose. Required by output type:
   lines, never N × fieldCount.
 - **JSON output (`--json`):** MUST be parseable (`json.Unmarshal` succeeds) AND
   structurally complete (key counts match the schema — e.g. a lock entry carries
-  `version`/`commit`/`treeSha`/`requires`). Assert field presence, not truncation
+  `version`/`commit`/`treeSha`). Assert field presence, not truncation
   absence.
 - **Error output:** MUST contain all three Principle-2 parts (what failed, why,
   suggested fix) as *distinct* checks, plus the correct exit code (0/1/2/3 per
