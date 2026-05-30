@@ -67,15 +67,20 @@ The agent decides to use `skillrig add` but isn't sure about the format? It dril
 
 ```
 $ skillrig add
-Error: requires at least 1 arg(s), only received 0
+add requires exactly one argument: the skill name
+why: got 0 argument(s)
+fix: skillrig add <skill> (e.g. skillrig add terraform-plan-review); run skillrig add --help for flags and examples
 
+# `skillrig add --help` then reveals the full (shipped) surface:
 Usage:
-  skillrig add <skill> [--origin OWNER/REPO] [--pin <ref>] [--json]
+  skillrig add <skill> [--dry-run] [--force] [--json] [--verbose]
 
 Examples:
   skillrig add terraform-plan-review
-  skillrig add terraform-plan-review --pin v1.4.0
+  skillrig add terraform-plan-review --dry-run
 ```
+
+> The origin is **resolved**, never passed to `add` (no `--from`/`--origin` arg — clarified 2026-05-30); immutable per-skill `--pin <ref>` is **deferred** (Out of Scope this slice). The synopsis above is the shipped surface.
 
 Progressive disclosure: **overview (injected) → usage (explored) → parameters (drilled down).** The agent discovers on-demand, each level providing just enough information for the next step.
 
@@ -122,8 +127,8 @@ verify failed: 'terraform-plan-review' tree SHA mismatch.
   locked:  a83b…  (claims v1.4.0)
   on-disk: c91f…
 → The vendored content does not match the version it claims to be.
-→ To restore the approved version: 'skillrig add terraform-plan-review --pin v1.4.0'
-→ If this edit is intentional, it's a local modification — commit it; 'skillrig bump' will 3-way merge it on the next upstream advance.
+→ To restore the approved version: 'skillrig add terraform-plan-review --force'
+→ If this edit is intentional, it's a local modification — commit it; 'skillrig bump' (planned) will 3-way merge it on the next upstream advance.
 ```
 
 **Auth as a distinct failure (R18) — the most common footgun.** A missing backing CLI and an auth failure fetching it are different problems. Never collapse them:
@@ -241,7 +246,7 @@ skillrig init --origin my-org/my-skills@staging    # track the 'staging' branch
 
 This realizes the `@ref` half of the ecosystem-standard identity grammar `OWNER/REPO[/path]@ref` (architecture R26) that `gh skill` (`gh skill install github/awesome-copilot documentation-writer@v1.2.0`) and Vercel `npx skills` use. The `[/path]` portion remains future work.
 
-**Two meanings of `@ref`, kept distinct.** For an **origin**, `@REF` is a *moving pointer* — a branch you track and re-resolve. For a **skill** vendored via `add` (`skillrig add <skill> --pin <ref>`), the ref is an *immutable* pin — a tag or commit SHA, recorded in the lock so the vendored content is reproducible. Same grammar, opposite intent: the origin says "where to look (and which line of development)"; the pin says "exactly which reviewed bytes." Docs and help text must not conflate them.
+**Two meanings of `@ref`, kept distinct.** For an **origin**, `@REF` is a *moving pointer* — a branch you track and re-resolve. For a **skill** vendored via `add` (`skillrig add <skill> --pin <ref>`, **planned** — not in the current slice), the ref is an *immutable* pin — a tag or commit SHA, recorded in the lock so the vendored content is reproducible. Same grammar, opposite intent: the origin says "where to look (and which line of development)"; the pin says "exactly which reviewed bytes." Docs and help text must not conflate them.
 
 ### Why a single `@ref` string, not a separate flag
 

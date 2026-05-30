@@ -272,6 +272,33 @@ var countsKeys = []string{"verified", "mismatch", "orphan", "missing", "dirty"}
 // US1 — Vendor a skill (add)
 // ---------------------------------------------------------------------------
 
+// assertVendoredMatchesOrigin checks every vendored file is byte-identical to the
+// origin with its mode preserved, and that check.sh keeps its executable bit (the
+// exec bit is part of the tree-SHA, so a mode change would break label-honesty).
+func assertVendoredMatchesOrigin(t *testing.T, c consumerRepo) {
+	t.Helper()
+
+	for _, f := range []string{"SKILL.md", "skill.toml", "check.sh"} {
+		got := readSkillFile(t, c.root, f)
+		want := readFile(t, filepath.Join(c.originDir, "skills", sampleSkill, f))
+
+		if got != want {
+			t.Errorf("vendored %s differs from origin", f)
+		}
+
+		gotMode := fileMode(t, filepath.Join(c.root, vendoredPath, f))
+		wantMode := fileMode(t, filepath.Join(c.originDir, "skills", sampleSkill, f))
+
+		if gotMode != wantMode {
+			t.Errorf("vendored %s mode = %v, want %v", f, gotMode, wantMode)
+		}
+	}
+
+	if execMode := fileMode(t, filepath.Join(c.root, vendoredPath, "check.sh")); execMode&0o111 == 0 {
+		t.Errorf("vendored check.sh lost its executable bit: mode = %v", execMode)
+	}
+}
+
 func TestQuickstart_AddVendorsSkill(t *testing.T) {
 	t.Parallel()
 
@@ -293,22 +320,9 @@ func TestQuickstart_AddVendorsSkill(t *testing.T) {
 		t.Errorf("human output missing next-step footer (skillrig verify):\n%s", res.stdout)
 	}
 
-	// Files vendored byte-identical to the origin (modes preserved).
-	for _, f := range []string{"SKILL.md", "skill.toml"} {
-		got := readSkillFile(t, c.root, f)
-		want := readFile(t, filepath.Join(c.originDir, "skills", sampleSkill, f))
-
-		if got != want {
-			t.Errorf("vendored %s differs from origin", f)
-		}
-
-		gotMode := fileMode(t, filepath.Join(c.root, vendoredPath, f))
-		wantMode := fileMode(t, filepath.Join(c.originDir, "skills", sampleSkill, f))
-
-		if gotMode != wantMode {
-			t.Errorf("vendored %s mode = %v, want %v", f, gotMode, wantMode)
-		}
-	}
+	// Files vendored byte-identical to the origin, with modes (incl. the exec bit)
+	// preserved.
+	assertVendoredMatchesOrigin(t, c)
 
 	// Lock: one entry; treeSha == the raw-git ground truth; no requires field.
 	entry := lockEntry(t, c.root, sampleSkill)

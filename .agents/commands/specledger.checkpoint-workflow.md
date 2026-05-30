@@ -161,6 +161,15 @@ Execution steps:
    - This review is context-free by design — you have no prior knowledge of
      implementation decisions or tradeoffs made during development.
 
+   ## Skills — load these FIRST (you have the Skill tool)
+   Before reviewing, invoke the Skill tool for the project's design/best-practice
+   skills so you judge against the SAME standards the code was meant to meet — not
+   ad-hoc taste. Review findings should cite these where relevant. For this Go CLI:
+   `agentic-go-cli-design` (errors-as-navigation, two-level output, exit codes,
+   `--help`/`--json`/`--verbose`/`--dry-run`/`--force`), plus `golang-code-style`,
+   `golang-testing`, and `golang-lint`. (Adapt the set to the repo's language/stack
+   and the skills available in the session.)
+
    ## Instructions
 
    1. Run `sl spec setup-plan --json` from repo root and parse JSON for FEATURE_SPEC, IMPL_PLAN, SPECS_DIR, BRANCH

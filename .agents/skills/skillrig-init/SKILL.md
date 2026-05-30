@@ -91,8 +91,9 @@ bound repo resolves the same origin.
 `init` records only an `OWNER/REPO[@REF]` **reference** — never a filesystem path (passing
 a path fails with `invalid origin … expected OWNER/REPO[@REF]`). In this release there is no
 network fetch, so when a later command (`skillrig add`) needs the origin's files it reads
-them from a **local git checkout at `./OWNER/REPO`, relative to where you run the command**
-(your repo root). So to vendor from a local copy of `my-org/my-skills`:
+them from a **local git checkout at `<repo-root>/OWNER/REPO`** (resolved against the repo
+root, so it works from any subdirectory). So to vendor from a local copy of `my-org/my-skills`,
+from the repo root:
 
 ```
 skillrig init --origin my-org/my-skills        # records the reference

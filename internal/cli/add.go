@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -43,10 +44,11 @@ func newAddCmd(opts *globalOpts) *cobra.Command {
 			"active origin (SKILLRIG_ORIGIN > project > global) exactly like every command and\n" +
 			"copies the skill byte-identically, injecting nothing.\n\n" +
 			"Local origin (this release): the configured origin OWNER/REPO is read from a local\n" +
-			"git checkout at ./OWNER/REPO — relative to the directory you run add from (your\n" +
-			"repo root) — not over the network. So `init --origin my-org/my-skills` expects that\n" +
-			"library checked out at ./my-org/my-skills; keep it out of your index (e.g. echo\n" +
-			"'my-org/' >> .git/info/exclude). Fetching a remote origin is a later, additive mode.\n\n" +
+			"git checkout at <repo-root>/OWNER/REPO — resolved against the repo root, so add\n" +
+			"works from any subdirectory — not over the network. So `init --origin my-org/my-skills`\n" +
+			"expects that library checked out at <repo-root>/my-org/my-skills; keep it out of your\n" +
+			"index (e.g. echo 'my-org/' >> .git/info/exclude). Fetching a remote origin is a later,\n" +
+			"additive mode.\n\n" +
 			"add is idempotent on identical content and refuses to overwrite a vendored skill\n" +
 			"whose on-disk content diverges from the lock unless you pass --force. Requires a\n" +
 			"git repository; commit the result, then run skillrig verify.",
@@ -56,7 +58,16 @@ func newAddCmd(opts *globalOpts) *cobra.Command {
 			"  skillrig add terraform-plan-review --dry-run\n\n" +
 			"  # Overwrite a locally-diverged copy with the origin's content\n" +
 			"  skillrig add terraform-plan-review --force",
-		Args: cobra.ExactArgs(1),
+		// A custom validator (not cobra.ExactArgs) so a misinvocation is
+		// errors-as-navigation — what/why/fix + an example — instead of cobra's
+		// terse "accepts 1 arg(s), received 0" dead end (cli.md Principle 1/2).
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return usageAddArgs(len(args))
+			}
+
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ac.skill = args[0]
 
@@ -94,6 +105,13 @@ func (ac *addCmd) run(cmd *cobra.Command) error {
 	}
 
 	originDir, ref := originDirRef(res.Origin)
+	// AR-1: anchor the local origin checkout to the repo root, not the process
+	// CWD. The destination (.agents/skills + the lock) is already repo-root-anchored
+	// via repoRoot; leaving the origin source relative made `add` resolve it against
+	// the CWD, so it failed from any subdirectory while the output still went to the
+	// repo root. Joining with repoRoot makes both sides consistent — `add` now works
+	// from anywhere in the repo.
+	originDir = filepath.Join(repoRoot, originDir)
 
 	result, err := skillcore.Add(skillcore.AddOptions{
 		OriginDir: originDir,
@@ -129,6 +147,15 @@ func originDirRef(origin config.Origin) (dir, ref string) {
 	return dir, ref
 }
 
+// usageAddArgs builds the navigational usage error for a wrong add argument
+// count (errors-as-navigation: what / why / fix + a concrete example), replacing
+// cobra's bare "accepts 1 arg(s)" message.
+func usageAddArgs(got int) *UsageError {
+	return usageErrorf("add requires exactly one argument: the skill name\n"+
+		"why: got %d argument(s)\n"+
+		"fix: skillrig add <skill> (e.g. skillrig add terraform-plan-review); run skillrig add --help for flags and examples", got)
+}
+
 // usageNoOriginConfigured builds the 3-part "no origin configured" usage error
 // (contract add.md): what / why / fix.
 func usageNoOriginConfigured() *UsageError {
@@ -141,6 +168,16 @@ func usageNoOriginConfigured() *UsageError {
 // values (exit 1), authoring the what/why/fix prose while preserving the raw
 // cause for --verbose. An unexpected error is wrapped generically.
 func mapAddError(skill string, err error) error {
+	var originMissing *skillcore.OriginNotFoundError
+	if errors.As(err, &originMissing) {
+		return &UsageError{
+			Msg: fmt.Sprintf("origin checkout not found at %s\n", originMissing.OriginDir) +
+				"why: this release reads the configured origin from a local checkout at that path, and it is absent\n" +
+				"fix: check out the origin there (git clone <origin-url> " + originMissing.OriginDir + "), or re-bind with skillrig init --origin OWNER/REPO",
+			Cause: err,
+		}
+	}
+
 	var notFound *skillcore.SkillNotFoundError
 	if errors.As(err, &notFound) {
 		return &UsageError{

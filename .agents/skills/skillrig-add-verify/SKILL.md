@@ -46,9 +46,11 @@ Offline and consume-only. **Requires a git repository** (project scope).
   (`SKILLRIG_ORIGIN` > project `.skillrig/config.toml` > global) exactly like every command.
   There is **no** `--from`/path argument.
 - **Local origin (this release)**: the configured `OWNER/REPO` is read from a local git
-  checkout at `./OWNER/REPO`, relative to where you run `add` (your repo root) — no network.
-  So `init --origin my-org/my-skills` expects that library checked out at `./my-org/my-skills`
-  (keep it out of your index, e.g. `echo 'my-org/' >> .git/info/exclude`).
+  checkout at `<repo-root>/OWNER/REPO` (resolved against the repo root, so `add` works from
+  any subdirectory) — no network. So `init --origin my-org/my-skills` expects that library
+  checked out at `<repo-root>/my-org/my-skills` (keep it out of your index, e.g.
+  `echo 'my-org/' >> .git/info/exclude`). If that checkout is absent, `add` says "origin
+  checkout not found" (distinct from "skill not found").
 - **Idempotent**: re-adding identical content reports success and changes nothing
   (`action: "unchanged"`).
 - **Never clobbers**: if the on-disk copy diverges from the recorded fingerprint, `add`
@@ -132,7 +134,8 @@ Diagnostics go to stderr, so `skillrig verify --json 2>/dev/null | jq .` stays c
 | Symptom (stderr) | Cause | Fix |
 |------------------|-------|-----|
 | `no origin configured` | no `SKILLRIG_ORIGIN` / project / global origin | `skillrig init --origin OWNER/REPO`, or set `SKILLRIG_ORIGIN` |
-| `skill "<name>" not found in origin` | no `skills/<name>/` at the configured origin | check the name against the origin's `skills/` |
+| `origin checkout not found at <path>` | the configured `OWNER/REPO` is not checked out locally at `<repo-root>/OWNER/REPO` | clone the origin there (e.g. `git clone <url> <path>`), or re-bind with `skillrig init` |
+| `skill "<name>" not found in origin` | the origin IS present but has no `skills/<name>/` | check the name against the origin's `skills/` |
 | `refusing to overwrite <path>` | on-disk content diverges from the record | re-run with `--force`, or revert local edits |
 | `not a git repository` | `add`/`verify` run outside a repo | run inside the repo (or `git init` first) |
 | `cannot read .skillrig/skills-lock.json` | malformed/unreadable lock (exit `1`, **not** `2`) | check/repair the file, or re-vendor with `skillrig add` |

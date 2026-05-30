@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -38,7 +39,15 @@ func newVerifyCmd(opts *globalOpts) *cobra.Command {
 			"  skillrig verify\n\n" +
 			"  # Machine-readable per-skill verdicts for an agent / jq\n" +
 			"  skillrig verify --json",
-		Args: cobra.NoArgs,
+		// Custom validator (not cobra.NoArgs) so an extra positional yields
+		// what/why/fix instead of cobra's "unknown command" dead end (cli.md P1/P2).
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				return usageVerifyArgs(args)
+			}
+
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return vc.run(cmd)
 		},
@@ -73,6 +82,15 @@ func (vc *verifyCmd) run(cmd *cobra.Command) error {
 
 // verifyNotGitRepoWhy is the rationale for verify's not-a-repo error.
 const verifyNotGitRepoWhy = "tree-SHA recompute needs git"
+
+// usageVerifyArgs builds the navigational usage error when verify is given
+// positional arguments it does not take (errors-as-navigation: what / why / fix).
+func usageVerifyArgs(args []string) *UsageError {
+	return usageErrorf("verify takes no arguments\n"+
+		"why: it verifies the whole repo (got: %s)\n"+
+		"fix: run skillrig verify (add --json for machine-readable per-skill verdicts)",
+		strings.Join(args, " "))
+}
 
 // handleVerifyError classifies skillcore.Verify's error. A *VerifyFailure is a
 // per-skill finding: render the report to stdout (human or --json) and return

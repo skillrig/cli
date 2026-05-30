@@ -37,6 +37,22 @@ func (e *LockError) Unwrap() error {
 	return e.Cause
 }
 
+// OriginNotFoundError is returned when the resolved local origin checkout does
+// not exist at OriginDir — e.g. the user ran `skillrig init` (which records only
+// an OWNER/REPO reference) but never checked the library out to its expected
+// local path. It is deliberately distinct from *SkillNotFoundError (the origin
+// IS present but the named skill is absent) so the CLI can tell the user to
+// check out the origin rather than re-check the skill name (errors-as-navigation:
+// do not conflate look-alike failure classes). Presentation-free: terse Error.
+type OriginNotFoundError struct {
+	OriginDir string
+	Ref       string
+}
+
+func (e *OriginNotFoundError) Error() string {
+	return fmt.Sprintf("origin checkout not found at %q", e.OriginDir)
+}
+
 // GitError is returned when a git invocation fails. It carries the process exit
 // code and captured stderr, mirroring the gh/git client pattern, so the caller
 // can render an environment error. It is presentation-free.

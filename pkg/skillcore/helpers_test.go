@@ -124,12 +124,26 @@ func stubCommandContext(exitCode int, stderr string) func(ctx context.Context, n
 		// Re-exec this test binary, routing into TestHelperProcess.
 		csArgs := append([]string{"-test.run=TestHelperProcess", "--"}, args...)
 
-		cmd := exec.CommandContext(ctx, os.Args[0], csArgs...)
-		cmd.Env = []string{
+		env := []string{
 			"GO_WANT_HELPER_PROCESS=1",
 			"HELPER_EXIT_CODE=" + strconv.Itoa(exitCode),
 			"HELPER_STDERR=" + stderr,
 		}
+		// Under `go test -cover`, os.Args[0] is a coverage-instrumented binary;
+		// re-exec'ing it with a cleared env makes it print "warning: GOCOVERDIR
+		// not set …" to stderr, which would pollute the git stderr the client
+		// captures and break TestGitClient_StubbedExit. Hand it a coverage dir so
+		// it stays silent (a real git binary writes no such warning). Without
+		// -cover the var is simply ignored.
+		coverDir := os.Getenv("GOCOVERDIR")
+		if coverDir == "" {
+			coverDir = os.TempDir()
+		}
+
+		env = append(env, "GOCOVERDIR="+coverDir)
+
+		cmd := exec.CommandContext(ctx, os.Args[0], csArgs...)
+		cmd.Env = env
 
 		return cmd
 	}

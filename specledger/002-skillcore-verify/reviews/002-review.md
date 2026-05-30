@@ -86,3 +86,56 @@ The first review agent's manual round-trip used a `cd "$WORK"` that silently no-
 2. **[HIGH] AR-1** — decide the CWD-vs-repo-root resolution: make `OriginDir` repo-root-relative (robust; tests still pass since root==CWD there), or document "run `add` from the repo root" prominently. Currently only a follow-up note.
 3. **[MEDIUM] AR-3** — add `pkg/skillcore/verify_test.go` (stub the git client; table-drive the status taxonomy + counts + aggregation).
 4. **[LOW] AR-4 / AR-5** — fold the AR-1/AR-2 nuance into the `skillrig-add-verify` skill; refresh the stale data-model sample SHA.
+
+---
+
+# Independent Adversarial Review #2 — 2026-05-30 (post-commit, clean tree)
+
+**Scope:** a second cold-context agent (Opus 4.8, xhigh), explicitly **forbidden from reading `reviews/`/`sessions/`** (true independence), reviewed the committed branch (`168afd1`): read artifacts + code, ran `make check`, exercised the binary, and probed edge cases. It **confirmed AR-1/AR-2/AR-3 independently** and found **new** defects below the green bar. `make check` PASSES; no CRITICAL.
+
+| ID | New? | Category | Severity | Summary |
+|----|------|----------|----------|---------|
+| **R2-H1** | **NEW** | Correctness (FR-003 idempotency) | **HIGH** | **`add` falsely refuses an identical re-add when manifest `name` ≠ directory name.** The lock is written keyed by `manifest.Name` (`add.go` ~L320) but `resolvePlacement` looks the entry back up by `opts.Skill` (the dir arg, ~L172: `lock.Skills[opts.Skill].TreeSha`). When they differ, the lookup misses → `recorded=="" ≠ treeSha` → identical re-add **refused** with a wrong `OverwriteError` "diverges from the recorded fingerprint". Reproduced live. data-model only *SHOULD* (not MUST) equate leaf==name, so it's reachable. No fixture has name≠dir, so all tests pass. |
+| **R2-H2** | **NEW** | Test harness | **HIGH** | **`go test -cover ./pkg/skillcore/...` FAILS (3 subcases).** Under `-cover`, the re-exec'd `TestHelperProcess` git stub emits `warning: GOCOVERDIR not set…` to stderr, which `TestGitClient_StubbedExit` (`treesha_test.go:144`) captures and compares against expected-clean stderr. `make check` uses plain `go test`, so it's invisible to the gate but breaks any `-cover` run / future coverage CI. Fix: set `GOCOVERDIR` in the stub or strip the warning. |
+| **R2-M3** | **NEW** | Errors-as-navigation (FR-019; cli.md P1/P2) | MEDIUM | **Bad-args invocation is a dead end.** `skillrig add` (no args) → only `error: accepts 1 arg(s), received 0`; `verify extra-arg` → `error: unknown command…` — **no what/why/fix, no Usage/Examples** (root `SilenceUsage:true`, root.go:41). Directly contradicts cli.md Principle 1's worked example showing `skillrig add` with no args printing Usage+Examples. |
+| **R2-M4** | confirms **AR-2** | Errors-as-navigation | MEDIUM | "skill not found in origin" conflates a **missing origin checkout** with a **wrong skill name** (`add.go:84-90`, any stat error → `SkillNotFoundError`); `--verbose` repeats the same terse message. Skill error table inherits it. |
+| **R2-L5** | **NEW** | Doc contract drift | LOW | **`docs/design/cli.md` documents a non-existent `add` surface** — lines 73/76–77 present the *current* synopsis/examples as `add <skill> [--origin OWNER/REPO] [--pin <ref>]` / `add … --pin v1.4.0`. Neither flag exists (real surface: `[--dry-run] [--force] [--json] [--verbose]`); `--from`/`--origin` was dropped and `--pin` is Out of Scope. *(My DocSync pass synced other lines but missed these.)* |
+| **R2-L6** | confirms **AR-1** | Origin resolution | LOW (conscious) | local-origin path resolved relative to **process CWD**, not repo root → `add` from a subdirectory fails ("skill not found"). Self-documented in `add.md:24` as a hardening candidate; still a footgun, no add-from-subdir test. |
+
+## Test-discipline gaps (Constitution II/III)
+
+| ID | New? | Gap |
+|----|------|-----|
+| **GAP-A** | confirms **AR-3** | `pkg/skillcore/verify.go` has **zero** unit tests — the entire Verify operation (status classification, `pathInHead`/`pathDirty` precedence, `readVerifyLock`, `enumerateOnDiskSkills`, `buildReport`) is validated only via black-box integration. |
+| **GAP-B** | **NEW** | `internal/cli` add/verify presentation layer has **zero** unit tests (only `init` is unit-tested) — `exitCodeFor`, `mapAddError`, renderers, `originDirRef`, `gitToplevel` are integration-only. Constitution III mandates presentation-free unit tests in `internal/…`. |
+| **GAP-C** | **NEW** | **`make test-unit` (`go test ./internal/...`) EXCLUDES `pkg/skillcore`** — the Constitution III ground-truth/table-driven centerpiece runs only under `make test`/`make check`. The Makefile's unit tier wasn't updated when skillcore moved to `pkg/` (SDK-1). A dev running the documented unit tier silently skips the integrity tests. |
+| **GAP-D** | **NEW** | `TestQuickstart_AddVendorsSkill`'s mode-preservation assertion is a **no-op** — both fixtures are `0o644`, so the "exec bit is part of the tree-SHA" guarantee is never exercised. Add a `0o755` file to the sample skill. |
+
+## Positives (independently re-verified)
+Ground-truth anchoring (lock treeSha == raw `git rev-parse`, raw-git oracle, relocation-invariance); verify genuinely read-only + offline + deterministic; exit codes correct & typed-switch (1 lock/repo, 2 verification, never 3); FR-014/SC-006 (requires-absent tools still pass, no `requires` in lock); aggregation; orphan scan confined to `.agents/skills` (view dir ignored); `dirty` distinct from `mismatch`, untracked stowaway → `dirty`; clean stdout/stderr; `--verbose` raw causes; skillrig-add-verify skill accurate. **No scope creep**; no FR wholly unimplemented.
+
+## Priority before merge (reviewer's call)
+**R2-H1** (idempotency correctness bug) · **R2-H2** (`-cover` failure) · **GAP-A/B** (no unit tests for verify or the add/verify CLI layer). Then GAP-C (Makefile unit tier), R2-M3/M4 (error navigation), R2-L5 (cli.md), GAP-D (exec-bit fixture).
+
+---
+
+# Remediations — 2026-05-30 (effort: high)
+
+All Review #2 findings **resolved** (AR-1 included per user decision). Gate after fixes: `make check` 0 lint issues + all tests; `go test -cover ./...` green (skillcore 79.5%, internal/cli 51.2% — both were 0% for verify/add-cli before); `make test-unit` now runs skillcore. Behavior fixes verified live (add from a subdir; missing-checkout error; bad-args navigation).
+
+| ID | Severity | Status | Fix (files) |
+|----|----------|--------|-------------|
+| **R2-H1** | HIGH | ✅ Fixed | `resolvePlacement` now looks up the lock by the **manifest name** (the key `writeLockEntry` writes), not the directory arg — identical re-add of a name≠dir skill is `unchanged`, not refused. Regression test `TestAdd_IdempotentWhenManifestNameDiffersFromDir`. (`pkg/skillcore/add.go`, `add_test.go`) |
+| **R2-H2** | HIGH | ✅ Fixed | The re-exec'd git stub sets `GOCOVERDIR`, so `go test -cover ./pkg/skillcore/...` no longer leaks a warning into captured stderr. (`pkg/skillcore/helpers_test.go`) |
+| **R2-M3** | MEDIUM | ✅ Fixed | Custom `Args` validators on `add`/`verify` return what/why/fix + an example instead of cobra's terse error. Unit-tested. (`internal/cli/add.go`, `verify.go`, `addverify_test.go`) |
+| **R2-M4 / AR-2** | MEDIUM/HIGH | ✅ Fixed | New typed `*OriginNotFoundError` distinguishes a missing local origin checkout from a wrong skill name; CLI renders "origin checkout not found at <path>" with the clone/re-bind fix. Tests at both layers. (`pkg/skillcore/{errors,add}.go`, `internal/cli/add.go`) |
+| **R2-L6 / AR-1** | LOW→fixed | ✅ Fixed | Origin source is now anchored to the repo root (`filepath.Join(repoRoot, originDir)`), matching the destination — `add` works from any subdirectory (verified live). (`internal/cli/add.go`) |
+| **R2-L5** | LOW | ✅ Fixed | `docs/design/cli.md` `add` synopsis/examples corrected to the shipped surface (`--dry-run`/`--force`/`--json`/`--verbose`); `--origin`/`--pin` marked dropped/planned. |
+| **GAP-A** | MEDIUM | ✅ Fixed | `pkg/skillcore/verify_test.go` — 10 unit tests: clean/mismatch/orphan/missing/dirty, dirty-masks-mismatch precedence, aggregate-all, empty-repo, unsupported-lockfileVersion → `*LockError`. |
+| **GAP-B** | MEDIUM | ✅ Fixed | `internal/cli/addverify_test.go` — `exitCodeFor` (incl. wrapped `*VerifyFailure`→2), `mapAddError` classes, `originDirRef`, arg validators, add/verify renderers (human shape + JSON completeness). |
+| **GAP-C** | — | ✅ Fixed | `make test-unit` → `go test ./internal/... ./pkg/...` (skillcore now in the unit tier). |
+| **GAP-D** | — | ✅ Fixed | Executable `check.sh` (0o755) added to the sample skill; `AddVendorsSkill` asserts the exec bit survives (mode preservation now actually exercised). |
+| **AR-4** | LOW | ✅ Fixed | Docs synced to the AR-1/R2-M4 behavior: `add --help`, `contracts/add.md`, `skillrig-init` + `skillrig-add-verify` skills now describe repo-root resolution + the distinct missing-checkout error. |
+| **AR-5** | LOW | ⏭️ Deferred | Stale `data-model.md` sample SHA — illustrative only (tests recompute via raw git); left as a cosmetic cleanup. |
+
+**Tooling:** `specledger.checkpoint-workflow` review-agent template now instructs loading `agentic-go-cli-design` + `golang-code-style`/`golang-testing`/`golang-lint` so future reviews judge against the same standards.

@@ -111,6 +111,65 @@ func TestAdd_Idempotent(t *testing.T) {
 	}
 }
 
+// TestAdd_IdempotentWhenManifestNameDiffersFromDir guards R2-H1: the lock is
+// keyed by the manifest name, so the placement guard must look up the recorded
+// fingerprint by that name too — not by the directory arg. data-model only says
+// the leaf SHOULD equal the name, so a dir "tf-review" with manifest name
+// "terraform-plan-review" is legal; before the fix an identical re-add was
+// wrongly refused with an *OverwriteError (FR-003 violation).
+func TestAdd_IdempotentWhenManifestNameDiffersFromDir(t *testing.T) {
+	t.Parallel()
+
+	originDir := t.TempDir()
+	runGit(t, originDir, "init", "-q")
+
+	const dirName = "tf-review" // != manifest name "terraform-plan-review"
+	writeFile(t, originDir, filepath.Join("skills", dirName, "SKILL.md"), 0o644, sampleSkillMd)
+	writeFile(t, originDir, filepath.Join("skills", dirName, "skill.toml"), 0o644, sampleManifest)
+	runGit(t, originDir, "add", "-A")
+	runGit(t, originDir, "commit", "-q", "-m", "seed dir!=name skill")
+
+	consumer := newConsumer(t)
+
+	if _, err := Add(addOpts(originDir, dirName, consumer, false)); err != nil {
+		t.Fatalf("first Add: %v", err)
+	}
+
+	second, err := Add(addOpts(originDir, dirName, consumer, false))
+	if err != nil {
+		t.Fatalf("identical re-add must be idempotent, not refused: %v", err)
+	}
+
+	if second.Action != ActionUnchanged {
+		t.Errorf("Action = %q, want %q (name!=dir must not false-refuse)", second.Action, ActionUnchanged)
+	}
+}
+
+// TestAdd_OriginCheckoutMissing guards R2-M4/AR-2: when the entire origin
+// checkout directory is absent, Add returns a distinct *OriginNotFoundError
+// (check out the origin) rather than *SkillNotFoundError (check the skill name).
+func TestAdd_OriginCheckoutMissing(t *testing.T) {
+	t.Parallel()
+
+	consumer := newConsumer(t)
+	missingOrigin := filepath.Join(consumer, "my-org", "my-skills") // never created
+
+	_, err := Add(addOpts(missingOrigin, "terraform-plan-review", consumer, false))
+	if err == nil {
+		t.Fatal("Add(missing origin checkout): want error, got nil")
+	}
+
+	var originMissing *OriginNotFoundError
+	if !errors.As(err, &originMissing) {
+		t.Fatalf("Add error = %T (%v), want *OriginNotFoundError", err, err)
+	}
+
+	var skillMissing *SkillNotFoundError
+	if errors.As(err, &skillMissing) {
+		t.Error("missing origin checkout must NOT be reported as SkillNotFoundError")
+	}
+}
+
 // TestAdd_DivergentRefused asserts the never-silently-clobber guard (FR-004):
 // once a vendored skill is locally modified it diverges from the lock, and a
 // plain re-add must refuse with an *OverwriteError (the CLI maps it to exit 1).

@@ -82,11 +82,9 @@ func (e *OverwriteError) Error() string {
 // overwrite unless opts.Force, writes nothing when opts.DryRun, and is
 // idempotent on identical content.
 func Add(opts AddOptions) (AddResult, error) {
-	srcDir := filepath.Join(opts.OriginDir, "skills", opts.Skill)
-
-	info, err := os.Stat(srcDir)
-	if err != nil || !info.IsDir() {
-		return AddResult{}, &SkillNotFoundError{Skill: opts.Skill}
+	srcDir, err := locateSkillSource(opts)
+	if err != nil {
+		return AddResult{}, err
 	}
 
 	manifest, err := ParseManifest(filepath.Join(srcDir, "skill.toml"))
@@ -109,7 +107,7 @@ func Add(opts AddOptions) (AddResult, error) {
 	destPath := vendorRoot + "/" + opts.Skill
 	destDir := filepath.Join(opts.RepoRoot, ".agents", "skills", opts.Skill)
 
-	action, err := resolvePlacement(opts, srcDir, destDir, treeSha)
+	action, err := resolvePlacement(opts, manifest.Name, srcDir, destDir, treeSha)
 	if err != nil {
 		return AddResult{}, err
 	}
@@ -145,12 +143,35 @@ func Add(opts AddOptions) (AddResult, error) {
 	return result, nil
 }
 
+// locateSkillSource resolves and validates the origin's skill subtree, returning
+// its directory. It distinguishes a missing origin checkout
+// (*OriginNotFoundError — the library isn't checked out at OriginDir) from a
+// missing skill (*SkillNotFoundError — the origin is present but has no such
+// skill), so the CLI can give the right fix (errors-as-navigation).
+func locateSkillSource(opts AddOptions) (string, error) {
+	if info, err := os.Stat(opts.OriginDir); err != nil || !info.IsDir() {
+		return "", &OriginNotFoundError{OriginDir: opts.OriginDir, Ref: opts.Ref}
+	}
+
+	srcDir := filepath.Join(opts.OriginDir, "skills", opts.Skill)
+	if info, err := os.Stat(srcDir); err != nil || !info.IsDir() {
+		return "", &SkillNotFoundError{Skill: opts.Skill}
+	}
+
+	return srcDir, nil
+}
+
 // resolvePlacement inspects the destination and decides the Action without
 // writing anything. A fresh placement is ActionVendored. An existing tree is
 // ActionUnchanged (idempotent) only when its on-disk content is byte-identical
 // to the origin source AND the lock records the matching fingerprint; any
 // divergence is ActionOverwritten under Force, otherwise an *OverwriteError.
-func resolvePlacement(opts AddOptions, srcDir, destDir, treeSha string) (Action, error) {
+//
+// name is the manifest name the lock is keyed by (writeLockEntry uses it); the
+// lookup MUST use it, not opts.Skill (the directory arg), or a skill whose
+// manifest name differs from its directory would never match its own lock entry
+// and an identical re-add would be wrongly refused (FR-003 idempotency).
+func resolvePlacement(opts AddOptions, name, srcDir, destDir, treeSha string) (Action, error) {
 	if _, err := os.Stat(destDir); err != nil {
 		if os.IsNotExist(err) {
 			return ActionVendored, nil
@@ -169,7 +190,7 @@ func resolvePlacement(opts AddOptions, srcDir, destDir, treeSha string) (Action,
 		return "", err
 	}
 
-	recorded := lock.Skills[opts.Skill].TreeSha
+	recorded := lock.Skills[name].TreeSha
 	if identical && recorded == treeSha {
 		return ActionUnchanged, nil
 	}
