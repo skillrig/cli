@@ -53,6 +53,33 @@ func (e *OriginNotFoundError) Error() string {
 	return fmt.Sprintf("origin checkout not found at %q", e.OriginDir)
 }
 
+// InvalidSkillNameError is returned when a skill name is not a single safe path
+// segment — it is empty, "."/"..", or contains a path separator (so it could
+// escape the canonical .agents/skills/<name> subtree). Add validates the name
+// before any filesystem operation, so a traversal name (e.g. "../x") is refused
+// before any copy or os.RemoveAll. Presentation-free: terse Error.
+type InvalidSkillNameError struct {
+	Skill string
+}
+
+func (e *InvalidSkillNameError) Error() string {
+	return fmt.Sprintf("invalid skill name %q", e.Skill)
+}
+
+// SymlinkUnsupportedError is returned when the origin skill subtree contains a
+// symlink. Following symlinks could read content outside the subtree and would
+// break the byte-identical / git-canonical vendoring guarantee (git records a
+// symlink as a link, not its target's content), so this slice refuses them
+// outright. Path is the offending symlink, relative to the skill dir.
+// Presentation-free: terse Error.
+type SymlinkUnsupportedError struct {
+	Path string
+}
+
+func (e *SymlinkUnsupportedError) Error() string {
+	return fmt.Sprintf("symlink not supported in vendored skill: %q", e.Path)
+}
+
 // GitError is returned when a git invocation fails. It carries the process exit
 // code and captured stderr, mirroring the gh/git client pattern, so the caller
 // can render an environment error. It is presentation-free.

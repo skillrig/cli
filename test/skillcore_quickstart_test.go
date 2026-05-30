@@ -486,7 +486,7 @@ func TestQuickstart_AddRefusesDivergentWithoutForce(t *testing.T) {
 	}
 
 	// Three distinct parts: what / why / fix.
-	assertContains(t, "what", res.stderr, "refusing to overwrite "+vendoredPath)
+	assertContains(t, "what", res.stderr, "refusing to overwrite \""+vendoredPath+"\"")
 	assertContains(t, "why", res.stderr, "on-disk content diverges from the recorded fingerprint")
 	assertContains(t, "fix", res.stderr, "--force")
 

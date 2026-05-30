@@ -250,6 +250,65 @@ func TestAdd_SkillNotFound(t *testing.T) {
 	}
 }
 
+// TestAdd_RejectsTraversalSkillName guards the path-traversal hardening (Qodo
+// #5): a skill name that is not a single safe path segment is refused with
+// *InvalidSkillNameError BEFORE any filesystem op, so it can never escape
+// .agents/skills/ (and os.RemoveAll can never hit an arbitrary dir).
+func TestAdd_RejectsTraversalSkillName(t *testing.T) {
+	t.Parallel()
+
+	originDir, _ := bootstrapOrigin(t)
+	consumer := newConsumer(t)
+
+	for _, bad := range []string{"", ".", "..", "../evil", "a/b", "a/../b", "/abs", `a\b`} {
+		_, err := Add(addOpts(originDir, bad, consumer, false))
+
+		var inv *InvalidSkillNameError
+		if !errors.As(err, &inv) {
+			t.Errorf("Add(%q): error = %T (%v), want *InvalidSkillNameError", bad, err, err)
+		}
+	}
+
+	// Nothing was written anywhere under the consumer (no escape, no partial vendor).
+	if _, err := os.Stat(filepath.Join(consumer, ".agents")); !os.IsNotExist(err) {
+		t.Error("a traversal-name add created .agents/; want nothing written")
+	}
+}
+
+// TestAdd_RejectsSymlinkInOrigin guards the symlink hardening (Qodo #6): an
+// origin skill containing a symlink is refused with *SymlinkUnsupportedError, and
+// nothing is vendored.
+func TestAdd_RejectsSymlinkInOrigin(t *testing.T) {
+	t.Parallel()
+
+	originDir := t.TempDir()
+	runGit(t, originDir, "init", "-q")
+
+	const skill = "with-symlink"
+	writeFile(t, originDir, filepath.Join("skills", skill, "SKILL.md"), 0o644, sampleSkillMd)
+	writeFile(t, originDir, filepath.Join("skills", skill, "skill.toml"), 0o644, sampleManifest)
+
+	if err := os.Symlink("SKILL.md", filepath.Join(originDir, "skills", skill, "link")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	runGit(t, originDir, "add", "-A")
+	runGit(t, originDir, "commit", "-q", "-m", "seed with symlink")
+
+	consumer := newConsumer(t)
+
+	_, err := Add(addOpts(originDir, skill, consumer, false))
+
+	var se *SymlinkUnsupportedError
+	if !errors.As(err, &se) {
+		t.Fatalf("Add error = %T (%v), want *SymlinkUnsupportedError", err, err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(consumer, ".agents", "skills", skill)); !os.IsNotExist(statErr) {
+		t.Error("symlink-containing skill was partially vendored; want nothing written")
+	}
+}
+
 // TestAdd_DryRunWritesNothing asserts --dry-run reports the action but leaves no
 // vendored files and no lock on disk.
 func TestAdd_DryRunWritesNothing(t *testing.T) {

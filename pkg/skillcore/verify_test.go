@@ -252,6 +252,61 @@ func TestVerify_AggregatesAllFindings(t *testing.T) {
 	}
 }
 
+// TestVerify_DirtyWhenUncommittedUnbornHead guards the #8/dirty interaction: a
+// vendored-but-never-committed skill in a repo with NO commits (unborn HEAD)
+// must be a `dirty` verdict, not a propagated git error — `git rev-parse HEAD:…`
+// fails with "bad revision"/"ambiguous argument", which is "not committed", not
+// a fatal repo failure.
+func TestVerify_DirtyWhenUncommittedUnbornHead(t *testing.T) {
+	t.Parallel()
+
+	repo := newConsumer(t) // git init, but NO commits → unborn HEAD
+
+	rel := skillsRoot + "/x"
+	writeFile(t, repo, filepath.Join(rel, "skill.toml"), 0o644, sampleManifest)
+	writeVerifyLock(t, repo, LockFile{
+		LockfileVersion: 1,
+		Skills:          map[string]LockEntry{"x": {TreeSha: "deadbeef", Path: rel}},
+	})
+
+	rep, err := Verify(repo)
+
+	var vf *VerifyFailure
+	if !errors.As(err, &vf) {
+		t.Fatalf("Verify error = %T (%v), want *VerifyFailure", err, err)
+	}
+
+	if v := findVerdict(t, rep, "x"); v.Status != StatusDirty {
+		t.Errorf("status = %q, want dirty (uncommitted on an unborn HEAD)", v.Status)
+	}
+}
+
+// TestVerify_PropagatesFatalGitError guards Qodo #8: a fatal git failure (here a
+// non-git directory) must surface as a *GitError (config/usage), NOT be
+// downgraded to a missing/orphan verdict — honoring the Verify SDK contract for
+// callers that don't pre-validate repoRoot.
+func TestVerify_PropagatesFatalGitError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir() // a tmpdir, NOT a git repo
+	writeVerifyLock(t, dir, LockFile{
+		LockfileVersion: 1,
+		Skills:          map[string]LockEntry{"x": {TreeSha: "deadbeef", Path: skillsRoot + "/x"}},
+	})
+
+	_, err := Verify(dir)
+
+	var gitErr *GitError
+	if !errors.As(err, &gitErr) {
+		t.Fatalf("Verify(non-repo) error = %T (%v), want *GitError", err, err)
+	}
+
+	var vf *VerifyFailure
+	if errors.As(err, &vf) {
+		t.Error("a fatal git failure must NOT be reported as a *VerifyFailure (it is exit 1, not 2)")
+	}
+}
+
 // TestVerify_MalformedLockVersion: an unsupported lockfileVersion is a *LockError
 // (config/usage, exit 1), NOT a *VerifyFailure (exit 2).
 func TestVerify_MalformedLockVersion(t *testing.T) {

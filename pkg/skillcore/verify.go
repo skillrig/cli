@@ -289,9 +289,11 @@ func verifyOrphanSkill(repoRoot, path string) (Verdict, error) {
 	return verdict, nil
 }
 
-// pathInHead reports whether path resolves to a tree in HEAD. A missing tree is
-// not an error (false, nil); a real git failure (e.g. not a repo) propagates as
-// a *GitError so the CLI can surface a config/usage error.
+// pathInHead reports whether path resolves to a tree in HEAD. A path that git
+// specifically reports as absent from the committed tree is (false, nil); any
+// other git failure (not a git repository, git not on PATH, unborn HEAD, …)
+// propagates as a *GitError so the SDK contract holds — Verify must NOT downgrade
+// a fatal git failure into a "missing"/"orphan" verdict (it returns the error).
 func pathInHead(repoRoot, path string) (bool, error) {
 	_, err := TreeSHA(repoRoot, "HEAD", path)
 	if err == nil {
@@ -299,14 +301,26 @@ func pathInHead(repoRoot, path string) (bool, error) {
 	}
 
 	var gitErr *GitError
-	if errors.As(err, &gitErr) && gitErr.ExitCode > 0 {
-		// A positive exit code from rev-parse means git ran but could not
-		// resolve HEAD:<path> — the path is simply not in the committed tree.
+	if errors.As(err, &gitErr) && gitErr.ExitCode > 0 && !isFatalGitError(gitErr.Stderr) {
+		// git ran inside a repo but could not resolve HEAD:<path> — the path is
+		// not in the committed tree. This covers an absent path ("does not exist
+		// in 'HEAD'") AND an unborn HEAD (no commits yet → "ambiguous argument
+		// 'HEAD'"/"bad revision"), both of which are "not committed", not failures.
 		return false, nil
 	}
 
-	// Exit code <= 0 means git could not run at all (not a repo / not on PATH).
+	// git could not run (ExitCode <= 0) or reported a fatal repo error (e.g. "not
+	// a git repository"): surface it as a *GitError so Verify honors its contract
+	// (a config/usage problem, not a missing/orphan verdict).
 	return false, err
+}
+
+// isFatalGitError reports whether stderr indicates git could not operate on a
+// repository at all (as opposed to merely failing to resolve a revision/path).
+// Only these are propagated; every other rev-parse failure means "not in the
+// committed tree".
+func isFatalGitError(stderr string) bool {
+	return strings.Contains(strings.ToLower(stderr), "not a git repository")
 }
 
 // pathDirty reports whether the working tree for path has uncommitted changes,

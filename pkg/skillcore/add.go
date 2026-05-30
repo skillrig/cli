@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Action is the outcome of an Add: how the vendored tree changed.
@@ -82,7 +83,7 @@ func (e *OverwriteError) Error() string {
 // overwrite unless opts.Force, writes nothing when opts.DryRun, and is
 // idempotent on identical content.
 func Add(opts AddOptions) (AddResult, error) {
-	srcDir, err := locateSkillSource(opts)
+	srcDir, err := prepareSource(opts)
 	if err != nil {
 		return AddResult{}, err
 	}
@@ -141,6 +142,66 @@ func Add(opts AddOptions) (AddResult, error) {
 	}
 
 	return result, nil
+}
+
+// prepareSource validates the skill name, locates the origin skill subtree, and
+// rejects any symlink within it — all the safety pre-flight before Add touches
+// the filesystem. opts.Skill is used as a path segment for the source, the
+// destination, and os.RemoveAll on overwrite, so a traversal name (e.g. "../x")
+// must be refused here, before any copy or delete can escape the canonical
+// subtree; a symlink would let copy/compare follow it outside the subtree and
+// break byte-identical/git-canonical vendoring.
+func prepareSource(opts AddOptions) (string, error) {
+	if err := validateSkillName(opts.Skill); err != nil {
+		return "", err
+	}
+
+	srcDir, err := locateSkillSource(opts)
+	if err != nil {
+		return "", err
+	}
+
+	if err := ensureNoSymlinks(srcDir); err != nil {
+		return "", err
+	}
+
+	return srcDir, nil
+}
+
+// validateSkillName rejects any skill name that is not a single safe path
+// segment, so it can never escape the canonical .agents/skills/<name> subtree
+// (path-traversal hardening): non-empty, not "." or "..", no path separator
+// (`/` or `\`), and equal to its own filepath.Base.
+func validateSkillName(name string) error {
+	if name == "" || name == "." || name == ".." ||
+		strings.ContainsAny(name, `/\`) || filepath.Base(name) != name {
+		return &InvalidSkillNameError{Skill: name}
+	}
+
+	return nil
+}
+
+// ensureNoSymlinks walks srcDir and returns a *SymlinkUnsupportedError on the
+// first symlink found. WalkDir yields a symlink as a non-directory entry and does
+// not descend into a symlinked directory, so d.Type()&fs.ModeSymlink detects both
+// file and directory symlinks before any copy/compare can follow them.
+func ensureNoSymlinks(srcDir string) error {
+	return filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.Type()&fs.ModeSymlink != 0 {
+			rel, relErr := filepath.Rel(srcDir, path)
+			if relErr != nil {
+				rel = path
+			}
+
+			return &SymlinkUnsupportedError{Path: rel}
+		}
+
+		return nil
+	})
 }
 
 // locateSkillSource resolves and validates the origin's skill subtree, returning

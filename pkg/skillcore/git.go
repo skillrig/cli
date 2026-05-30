@@ -54,9 +54,23 @@ func (c *gitClient) run(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// revParse runs `git -C <gitDir> rev-parse <rev>` and returns the trimmed
-// output (e.g. a resolved commit or tree SHA).
+// revParse runs `git -C <gitDir> rev-parse <rev>` and returns the trimmed output
+// (e.g. a resolved commit or tree SHA).
+//
+// A rev never legitimately begins with '-', so one that does is refused up front
+// rather than passed to git — where a leading-dash rev (e.g. from an origin ref
+// like "-h", which the shape-only origin validation permits) would be parsed as
+// an option. git rev-parse cannot be made safe here with `--`/`--end-of-options`
+// (it echoes those tokens to stdout instead of treating them as terminators), so
+// the guard is the correct fix for this option-injection vector (Qodo #7).
 func (c *gitClient) revParse(gitDir, rev string) (string, error) {
+	if strings.HasPrefix(rev, "-") {
+		return "", &GitError{
+			ExitCode: -1,
+			Stderr:   "refusing to use a revision that begins with '-': " + rev,
+		}
+	}
+
 	return c.run(context.Background(), "-C", gitDir, "rev-parse", rev)
 }
 

@@ -139,3 +139,22 @@ All Review #2 findings **resolved** (AR-1 included per user decision). Gate afte
 | **AR-5** | LOW | ⏭️ Deferred | Stale `data-model.md` sample SHA — illustrative only (tests recompute via raw git); left as a cosmetic cleanup. |
 
 **Tooling:** `specledger.checkpoint-workflow` review-agent template now instructs loading `agentic-go-cli-design` + `golang-code-style`/`golang-testing`/`golang-lint` so future reviews judge against the same standards.
+
+---
+
+# Qodo Bot Review (PR #5) — 2026-05-30
+
+Automated Qodo review on the PR: **4 bugs + 4 rule violations**. Triaged against the codebase.
+
+| # | Finding | Disposition |
+|---|---------|-------------|
+| **5** | Skill-name **path traversal** (`opts.Skill` unvalidated → escape `.agents/skills/`, `os.RemoveAll` arbitrary dir) | ✅ **Fixed** — `validateSkillName` (single safe segment) gates `Add` before any FS op; `*InvalidSkillNameError` + tests (`../x`, `a/b`, `..`, abs, `\`). |
+| **6** | **Symlink following** in copy/compare (read outside subtree; breaks git-canonical) | ✅ **Fixed** — `ensureNoSymlinks` rejects any symlink in the origin subtree; `*SymlinkUnsupportedError` + test. **Policy:** reject this slice (noted in `docs/design/cli.md`; preserve-as-symlink is a future relaxation). |
+| **8** | **Verify masks git failures** (`pathInHead` treated any exit>0 as "missing") | ✅ **Fixed** — propagate as `*GitError` only when git couldn't run or "not a git repository"; every other rev-parse failure (absent path, unborn HEAD) stays "not in tree". Tests for both the fatal-error and unborn-HEAD-dirty cases. |
+| **7** | **rev-parse leading-dash** option injection (ref `-h`) | ✅ **Fixed** — `revParse` refuses a rev beginning with `-` (git rev-parse echoes `--`/`--end-of-options`, so a guard is the correct fix, not a terminator). Test asserts no "unknown option". |
+| **1** | `%s` vs `%q` for paths in `mapAddError` (rule 782577) | ✅ **Fixed** — `%q` for `OriginDir`/`Path`; updated the affected integration assertion. |
+| **3** | Unchecked `Fprintf`→`strings.Builder` (rule 782713) | ⏭️ **Skipped** — `strings.Builder` never errors; the project's own errcheck does not flag it. Harmless. |
+| **4** | Missing `//go:build integration` (rule 782685) | ❌ **Declined** — conflicts with the project convention (integration separated by the `./test/` dir; 001 has no tag; Makefile uses `go test ./test/...`). Reply posted on the PR. |
+| **2** | verify report on stdout (rule 783453) | ❌ **Declined (by design)** — the verdict report **is** the data; the exit code is the error signal (cf. `grep`/`diff`/`go test`); the contract requires `verify --json 2>/dev/null \| jq` to work. Reply posted on the PR. |
+
+Gate after the round: `golangci-lint` 0 issues; `go test -cover -count=1 ./...` green (skillcore **80.7%**, internal/cli **51.6%**). Note: `make check`'s `go test ./...` can cache a **stale** `test/` result (integration tests exec a separately-built binary the cache doesn't track) — validate the integration tier with `-count=1`.

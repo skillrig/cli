@@ -168,12 +168,32 @@ func usageNoOriginConfigured() *UsageError {
 // values (exit 1), authoring the what/why/fix prose while preserving the raw
 // cause for --verbose. An unexpected error is wrapped generically.
 func mapAddError(skill string, err error) error {
+	var invalidName *skillcore.InvalidSkillNameError
+	if errors.As(err, &invalidName) {
+		return &UsageError{
+			Msg: fmt.Sprintf("invalid skill name %q\n", invalidName.Skill) +
+				"why: a skill name must be a single path segment (no '/' or '..') so it stays inside .agents/skills/\n" +
+				"fix: pass just the skill's directory name, e.g. skillrig add terraform-plan-review",
+			Cause: err,
+		}
+	}
+
+	var symlink *skillcore.SymlinkUnsupportedError
+	if errors.As(err, &symlink) {
+		return &UsageError{
+			Msg: fmt.Sprintf("cannot vendor %q: it contains a symlink (%q)\n", skill, symlink.Path) +
+				"why: symlinks are not supported in vendored skills this release — following them would break byte-identical, git-canonical vendoring\n" +
+				"fix: remove the symlink in the origin skill, or vendor a skill without symlinks",
+			Cause: err,
+		}
+	}
+
 	var originMissing *skillcore.OriginNotFoundError
 	if errors.As(err, &originMissing) {
 		return &UsageError{
-			Msg: fmt.Sprintf("origin checkout not found at %s\n", originMissing.OriginDir) +
+			Msg: fmt.Sprintf("origin checkout not found at %q\n", originMissing.OriginDir) +
 				"why: this release reads the configured origin from a local checkout at that path, and it is absent\n" +
-				"fix: check out the origin there (git clone <origin-url> " + originMissing.OriginDir + "), or re-bind with skillrig init --origin OWNER/REPO",
+				fmt.Sprintf("fix: check out the origin there (git clone <origin-url> %q), or re-bind with skillrig init --origin OWNER/REPO", originMissing.OriginDir),
 			Cause: err,
 		}
 	}
@@ -182,7 +202,7 @@ func mapAddError(skill string, err error) error {
 	if errors.As(err, &notFound) {
 		return &UsageError{
 			Msg: fmt.Sprintf("skill %q not found in origin\n", skill) +
-				"why: no skills/" + skill + "/ at the configured origin\n" +
+				fmt.Sprintf("why: no skills/%s/ at the configured origin\n", skill) +
 				"fix: check the skill name against the origin",
 			Cause: err,
 		}
@@ -191,7 +211,7 @@ func mapAddError(skill string, err error) error {
 	var overwrite *skillcore.OverwriteError
 	if errors.As(err, &overwrite) {
 		return &UsageError{
-			Msg: fmt.Sprintf("refusing to overwrite %s\n", overwrite.Path) +
+			Msg: fmt.Sprintf("refusing to overwrite %q\n", overwrite.Path) +
 				"why: on-disk content diverges from the recorded fingerprint\n" +
 				"fix: re-run with --force, or revert local edits",
 			Cause: err,

@@ -5,8 +5,30 @@ import (
 	"errors"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
+
+// TestTreeSHA_DashRefNotTreatedAsOption guards Qodo #7: a ref beginning with '-'
+// (which the shape-only origin validation permits) must be treated as a revision
+// via `--end-of-options`, never parsed as a git option — so the failure is a
+// bad-revision *GitError, not an "unknown option" error.
+func TestTreeSHA_DashRefNotTreatedAsOption(t *testing.T) {
+	t.Parallel()
+
+	originDir, skill := bootstrapOrigin(t)
+
+	_, err := TreeSHA(originDir, "-h", "skills/"+skill)
+
+	var gitErr *GitError
+	if !errors.As(err, &gitErr) {
+		t.Fatalf("TreeSHA(ref=-h) error = %T (%v), want *GitError", err, err)
+	}
+
+	if strings.Contains(strings.ToLower(gitErr.Stderr), "unknown option") {
+		t.Errorf("ref '-h' was parsed as a git option (stderr: %q); --end-of-options should prevent this", gitErr.Stderr)
+	}
+}
 
 // hex40 matches a git SHA-1 (40 lowercase hex chars).
 var hex40 = regexp.MustCompile(`^[0-9a-f]{40}$`)
