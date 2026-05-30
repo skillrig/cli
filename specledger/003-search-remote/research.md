@@ -68,5 +68,19 @@ All design uncertainties were resolved by four time-boxed spikes during `/specle
 
 **Decision:** Shell **`git` partial-clone + sparse-checkout** for both the skill subtree and the catalog file (a sparse single-file checkout of `index.json`), one transport. **Rationale:** keeps the "shell `git`, no in-process hashing dep" stance, makes the tree-SHA ground-truth trivial (git computes it), and keeps auth uniform (one `http.extraHeader` path). **Alternative:** raw HTTPS GET (`raw.githubusercontent`/contents API) for the catalog — rejected for this slice (a second transport + a second auth path for marginal latency benefit; revisit only if `git`-fetching a single file proves too slow).
 
+## D8 — Search algorithm, index storage, terminology (Spike S5)
+
+**Decision:** `search` is **query-first**. The positional `[QUERY...]` is a **case-insensitive token-AND substring** match over `name + description + topics` (a skill matches iff every whitespace-separated term is a substring of that concatenated text). `--topic` is a separate exact-string, case-insensitive, AND-across-repeats membership filter. **Ordering** is a pure deterministic function of (query, entry): a fixed relevance bucket — exact-name `3` > name-hit `2` > topic-hit `1` > description-only `0` — then **lexicographic by `name`** (unique per S2 = stable total order). Empty query + no topic ⇒ list all by name; no match ⇒ empty + exit 0. **No fuzzy/Levenshtein/embedding/TF-IDF/BM25** (N6).
+
+**Storage:** keep the single committed **flat `index.json`** (S2) + an **in-memory filter** at search time. A flat scan is microseconds for tens–hundreds of entries and is dwarfed by the per-call git fetch; an index structure earns its keep only at ~10k+ docs in a long-lived process — pure YAGNI here. Reject a committed inverted index (duplicate source-of-truth, doubles drift) and any binary index.
+
+**Dependency:** **stdlib only** (`strings.ToLower/Contains/Fields`, `slices.SortFunc`) — ~30 lines, deterministic, maximally testable. `bleve` rejected (persists a *binary* index → git-hostile + heavy); `closestmatch`/`lithammer/fuzzysearch` no win on short names. The pre-approved-dep escape hatch *if forgiving matching is ever wanted post-v0* is `github.com/sahilm/fuzzy` (pure-Go, no-cgo, deterministic) — **not** pulled in for v0. (So the user's "new deps acceptable" turned out unnecessary — a YAGNI win.)
+
+**Terminology:** **rename label → topic** (`--topic`, `topics[]`, `metadata.x-skillrig.topics`). The agentskills.io spec defines *no* tags/topics/keywords field, so nothing upstream breaks; GitHub's repo-"topics" reinforces the term; and it removes the collision with git-tag version pins (`--pin <tag>`, `name-vSEMVER`). Git-tag usages stay "tag." **Flag is `--topic`** (not a generic `--filter` — one dimension exists, YAGNI; pre-release means a `--filter field=value` can be added later if multiple dimensions emerge).
+
+**Placement / fields:** consumer-side in-memory filter over the per-call-fetched single-tip catalog; the matcher lives in `pkg/skillcore` (presentation-free, AP-04). **No new catalog field** — `name`+`description`+`topics` suffice; `description` is the ecosystem-sanctioned keyword field, so no separate `keywords`.
+
+**Alternatives considered:** fuzzy/typo tolerance, TF-IDF/BM25 ranking, a committed inverted index, a `keywords` field, a search cache/server — all rejected (N6 / YAGNI / git-friendliness). **Scope guard:** these stay out of v0.
+
 ## Open items intentionally deferred (not blockers)
 - GitHub Enterprise host auth (S3) · per-version tree-SHA publishing (S5/§8a) · catalog caching (D-catalog-fetch) · cross-ref aggregation (D2) · `httptest` real-HTTP coverage (D6). All recorded; none block this slice.

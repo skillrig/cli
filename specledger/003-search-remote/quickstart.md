@@ -11,10 +11,12 @@ Each scenario is an executable `TestQuickstart_*` (Constitution §II): concrete 
 
 ## US1 — Discover (search) · P1
 
-**`TestQuickstart_SearchListsSkills`** — Given an origin publishing ≥2 skills, `skillrig search` lists each (`name`, `version`, one-line desc) + footer hint; assert `len(lines) ≤ matches + 5`.
-**`TestQuickstart_SearchFilterByTag`** — `skillrig search --tag aws` lists only aws-tagged skills; identical across two runs (determinism, SC-002).
-**`TestQuickstart_SearchEmptyResult`** — `skillrig search --tag nonesuch` → `no skills matched`, **exit 0**.
-**`TestQuickstart_SearchJSONComplete`** — `--json` parses (`json.Unmarshal` ok) and every entry has name/version/namespace/description/tags/path (field-presence, not truncation).
+**`TestQuickstart_SearchListsSkills`** — Given an origin publishing ≥2 skills, `skillrig search` (no query) lists each (`name`, `version`, one-line desc) + footer hint; assert `len(lines) ≤ matches + 5`.
+**`TestQuickstart_SearchQueryMatchesNameDesc`** — `skillrig search terraform plan` returns only skills whose name+description+topics contain **both** terms (token-AND substring); a skill matching one term but not the other is excluded (FR-002).
+**`TestQuickstart_SearchOrderingDeterministic`** — for a query hitting several skills, results are ordered by the fixed relevance bucket then name, and are **byte-identical across two runs** (D8/N6, SC-002).
+**`TestQuickstart_SearchFilterByTopic`** — `skillrig search --topic aws` lists only aws-topic skills; identical across two runs.
+**`TestQuickstart_SearchEmptyResult`** — `skillrig search --topic nonesuch` → `no skills matched`, **exit 0**.
+**`TestQuickstart_SearchJSONComplete`** — `--json` parses (`json.Unmarshal` ok) and every entry has name/version/namespace/description/topics/path (field-presence, not truncation).
 **`TestQuickstart_SearchConventionMismatch`** — origin catalog `skillrigConvention: 2` → exit 1, message names a compatibility mismatch + "update skillrig" (3 parts).
 **`TestQuickstart_SearchHelpExamples`** — `search --help` shows purpose + ≥2 examples.
 
@@ -41,7 +43,7 @@ Each scenario is an executable `TestQuickstart_*` (Constitution §II): concrete 
 
 ## US5 — Catalog generation (index) · P2
 
-**`TestQuickstart_IndexGenerates`** — `skillrig index` over the origin fixture writes `index.json` whose entries match the skills' frontmatter, **including tags** (the field `build-index.sh` dropped).
+**`TestQuickstart_IndexGenerates`** — `skillrig index` over the origin fixture writes `index.json` whose entries match the skills' frontmatter, **including topics** (the field `build-index.sh` dropped).
 **`TestQuickstart_IndexDeterministic`** — run twice on unchanged skills → byte-identical output (SC-009).
 **`TestQuickstart_IndexMatchesCommitted`** — `skillrig index` output **equals** the committed PoC `index.json` (producer == artifact oracle).
 **`TestQuickstart_IndexMalformedFrontmatter`** — a skill with broken frontmatter → exit 1 naming the offending `SKILL.md`.
@@ -55,7 +57,7 @@ Each scenario is an executable `TestQuickstart_*` (Constitution §II): concrete 
 ### Traceability
 | US | Scenarios | FRs | SCs |
 |---|---|---|---|
-| US1 search | SearchListsSkills/FilterByTag/EmptyResult/JSONComplete/ConventionMismatch/HelpExamples | 001–005, 016, 021 | 002, 008 |
+| US1 search | SearchQueryMatchesNameDesc/ListsSkills/OrderingDeterministic/FilterByTopic/EmptyResult/JSONComplete/ConventionMismatch/HelpExamples | 001–002a, 005, 016, 021 | 002, 008 |
 | US2 add remote | AddRemoteNoLocalCopy/Idempotent/ForceOnDivergence | 006–010, 012 | 001, 003, 006 |
 | US3 pin | AddPinnedReproducible/AddPinNotFound | 013–015 | 004 |
 | US4 failures | Classify*/AddAuth/PrivateNotFound/Unreachable/Verbose | 016–020, 022 | 005 |

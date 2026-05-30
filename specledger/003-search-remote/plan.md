@@ -5,7 +5,7 @@
 
 ## Summary
 
-Deliver the first end-to-end consumer loop — **`init` → `search` → `add` → `verify`** — plus the origin-side **`index`** generator that keeps discovery honest. A user binds a repo to a remote GitHub origin, **finds** a skill (`search` reads the origin's catalog, deterministic `--tag` filter), and **vendors** it directly from the remote (`add` fetches the subtree, no local checkout), recording `commit` + `treeSha` + resolved `version/tag` in the lock so `verify` (002) still passes. The catalog `search` reads is produced by `skillrig index` from each skill's **`SKILL.md` frontmatter** — which this slice migrates to (dropping `skill.toml`, the first build step), aligning with the agentskills.io standard.
+Deliver the first end-to-end consumer loop — **`init` → `search` → `add` → `verify`** — plus the origin-side **`index`** generator that keeps discovery honest. A user binds a repo to a remote GitHub origin, **finds** a skill (`search` reads the origin's catalog — query-first over name+description, deterministic `--topic` filter), and **vendors** it directly from the remote (`add` fetches the subtree, no local checkout), recording `commit` + `treeSha` + resolved `version/tag` in the lock so `verify` (002) still passes. The catalog `search` reads is produced by `skillrig index` from each skill's **`SKILL.md` frontmatter** — which this slice migrates to (dropping `skill.toml`, the first build step), aligning with the agentskills.io standard.
 
 All four design uncertainties were resolved in spikes **before** planning (S1 manifest format, S2 catalog lifecycle, S3 auth, S4 testing); this plan consumes their conclusions and does not re-open them.
 
