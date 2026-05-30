@@ -4,7 +4,7 @@
 
 **Scope:** post-implementation (HEAD `429f0ca`, clean tree). Adversarial divergence review of the implemented branch vs spec/plan/data-model/contracts/quickstart. Implemented via `/specledger.implement-workflow` (11 agents; the experiment deliberately skips the `sl issue` ledger — the gate is quickstart tests + `make check`).
 
-**Verdict:** clean checkpoint — **0 CRITICAL, 0 HIGH**. The 14 verify-workflow findings are all present in code+tests (spot-checked). Three MEDIUM/LOW pre-merge items, all conscious/tracked. The single most valuable next step is the independent adversarial deep-dive (make-check-green ≠ bug-free — see note).
+**Verdict (CORRECTED — see Adversarial Deep-Dive below):** the divergence-review pass below reported "0 CRITICAL, 0 HIGH", but that was **wrong**: it confirmed the remediated-finding test *functions exist* without checking they actually **run** — 10 remote `TestQuickstart_*` scenarios are `t.Skip`-ped, so `make check` was green over a 0%-covered remote surface. The independent adversarial deep-dive (run immediately after) flipped the verdict to **3 CRITICAL + 1 HIGH**: the P1 remote-acquisition keystone is not shippable. Lesson recorded: **a test that exists ≠ a test that runs; grep `t.Skip` at checkpoint.**
 
 ### Divergences
 
@@ -58,5 +58,45 @@
 
 ### Uncommitted Changes
 - None (HEAD `429f0ca`, working tree clean).
+
+---
+
+## Adversarial Deep-Dive: 2026-05-31 (independent cold-context Opus, HEAD `4bcd7f9`)
+
+**Flipped verdict: the P1 remote-acquisition keystone is unimplemented-as-shippable and untested.** `make check` + `go test -count=1 ./...` pass ONLY because every remote scenario is `t.Skip`-ped (0% coverage on the fetch path). The `index`, manifest-migration, local-path-`add`, and `search`-against-a-local-checkout surfaces are genuinely working and well-tested. All findings below independently verified by this session before recording.
+
+| # | Sev | Type | Verified | Issue (file:line) |
+|---|-----|------|----------|-------------------|
+| C1 | CRITICAL | oversight | ✅ | `internal/cli/search.go loadCatalog` reads `os.ReadFile(repoRoot/OWNER/REPO/index.json)` only — **`search` never fetches a remote catalog**. FR-001/A2/contract step 2 unmet; the remote `init→search` workflow cannot run. |
+| C2 | CRITICAL | oversight | ✅ | `pkg/skillcore/fetch.go cloneURL` hardcodes `https://github.com/OWNER/REPO.git`; `internal/config/origin.go originPattern` rejects `file://`. The S4 `file://` substrate is unwireable, so **all 10 remote `TestQuickstart_*` are skipped** (`remoteSubstrateBlocked`); `FetchSkill/FetchSparse/Clone/acquireRemote/resolvePin/classifyFetchError` are 0% covered; the named lock-treeSha==raw-git oracle does not exist. |
+| C3 | CRITICAL | oversight | ✅ | `fetch.go classifyFetchError`: when `req.Pinned`, **any** NotFound is rewritten to `NoSuchVersionError` — a missing/private *repo* with `--pin` reports "no such version" (reproduced). Conflates the two classes FR-015/C2 require distinct. |
+| H1 | HIGH | oversight | ✅ | `acquireRemote` never calls `CheckConvention` — remote `add` skips the convention gate (FR-016 "both search and add"); `mapConventionError` is dead code from add's path. |
+| H2 | HIGH | oversight | ✅ | `resolvePin` 0% covered; SC-004 two-pin-form equivalence asserted nowhere (test skipped). |
+| H3 | HIGH | oversight | ✅ | `classifyFetchError` not-found→authenticate-hint refinement + non-`*GitError` passthrough untested. |
+| M1 | MEDIUM | oversight | ✅ | `manifest.go Require` has only `yaml:` tags → `encoding/json` emits PascalCase (`"Tool"/"Version"`) in `index.json` AND `search --json`; data-model §2 specifies lowercase. `jq '.skills[].requires[].tool'` → null. **`IndexMatchesCommitted` is a circular oracle** (producer==committed fixture, both wrong) and cannot catch it. |
+| M2 | MEDIUM | oversight | ✅ | Remote not-found always sets `Skill`, so a missing *origin repo* renders as "skill X not found"; `OriginNotFoundError` only on the local-path form. |
+| L1 | LOW | oversight | ✅ | Commit-SHA `--pin` likely unfetchable — `fetchSparseInto` clones tips then `checkout <ref>`; an arbitrary SHA not on a tip won't checkout (no `fetch <sha>`). |
+| L2 | LOW | oversight | ✅ | `AuthError`/`UnreachableError` built with empty `Origin` in `ClassifyGitError`, never repopulated — latent trap. |
+
+**Confirmed-good (independently):** manifest→`SKILL.md` frontmatter did not regress 002 (local add/verify/idempotent exercised live); exact-match convention `== 1` (0/absent/higher fail); two-layer + single-`skillcore`-fetch/tree-SHA (AP-04) hold; skill co-evolution done; `search`/`add`/`index --help` each ≥2 examples.
+
+**Root cause:** no `file://`/local-path **origin** seam (`originPattern` rejects it; `cloneURL` hardcodes GitHub). This blocks the S4 test substrate AND means the D3 explicit-local-path-origin mode (FR-011) is not actually configurable. Fixing this seam unblocks the 10 tests and underpins C1/H1.
+
+**DoD status:** US1 PARTIAL (local half works; remote `search` unbuilt), US2 NOT MET (all skipped + H1), US3 NOT MET (skipped + C3), US4 PARTIAL (unit stderr-map only; integration skipped + C3), US5 MET (modulo M1 circular oracle).
+
+### Items Requiring Action Before Merge (REVISED — blocking)
+1. **[CRITICAL/root] file://-or-local-path origin seam** — accept a `file://`/path origin (`origin.go`) and derive the clone target from it (`cloneURL`/`fetch.go`); this also delivers FR-011 local-path mode. Unblocks the test substrate.
+2. **[CRITICAL] C1** — implement remote catalog fetch in `search` (fetch `index.json` per call when the origin is remote).
+3. **[CRITICAL] C3 + M2** — only classify `NoSuchVersionError` when the repo/skill exists but the ref does not; preserve repo-vs-skill-vs-version distinction.
+4. **[CRITICAL] C2/H2/H3** — un-skip the 10 remote scenarios; wire them to the `file://` bare-repo substrate with the raw-git treeSha oracle; cover `resolvePin`/`classifyFetchError`.
+5. **[HIGH] H1** — gate `skillrigConvention` in remote `add`.
+6. **[MEDIUM] M1** — add `json:` tags to `Require` (lowercase); regenerate the committed `index.json` fixture; break the circular oracle (assert lowercase keys + a non-self fixture).
+7. **[LOW] L1/L2** — commit-SHA pin fetch strategy; populate `Origin` on Auth/Unreachable.
+
+### Tests & Checks (deep-dive)
+- `make check`: PASS (0 lint). `go test -count=1 ./...`: PASS — **but 10 remote `TestQuickstart_*` are `t.Skip`-ped**, so "green" overstates readiness; the P1 remote surface is neither exercised nor reachable from the binary. `pkg/skillcore` coverage 72% overall, fetch path ~0%.
+
+### Process lesson
+- Checkpoint missed this by checking test-function *existence*, not execution. **Add `grep -rn "t.Skip" test/` to the checkpoint routine**; treat any skipped acceptance scenario as an unmet DoD, not a pass.
 
 ---
