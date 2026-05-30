@@ -21,6 +21,8 @@ skillrig add <skill> [--dry-run] [--force] [--json] [--verbose]
 
 > **Origin, not a path** (clarified 2026-05-30): there is **no** `--from`/path argument. `add` resolves the active origin through the shared resolver (`SKILLRIG_ORIGIN` > project `.skillrig/config.toml` > global) exactly like every command; the origin *value* may be a local checkout this slice. Tests do `skillrig init --origin <local-origin>` then `skillrig add <skill>`.
 
+> **Local-origin resolution (this slice)** — `init` accepts only an `OWNER/REPO[@REF]` reference (not a filesystem path). For a local origin, `add` reads that reference from a **git checkout at `./OWNER/REPO`, relative to the directory `add` runs from** (your repo root): `init --origin my-org/my-skills` ⇒ `add` reads `./my-org/my-skills/skills/<skill>/`. `@REF` selects the revision (default `HEAD`). Keep the nested checkout out of the consumer index (e.g. `echo 'my-org/' >> .git/info/exclude`). This is the concrete encoding of "the origin value may be a local checkout"; fetching a remote origin over the network is a later, additive mode. *(Follow-up: the path is resolved relative to the process CWD, not the resolved repo root — run `add` from the repo root. Making it repo-root-relative is a hardening candidate.)*
+
 ## Help (Progressive Discovery)
 
 ```

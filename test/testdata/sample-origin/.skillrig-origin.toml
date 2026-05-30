@@ -1,0 +1,10 @@
+# Canonical, design-aligned sample origin used by the TestQuickstart_* suite.
+# The convention contract this origin speaks (architecture §2d.3). The generic
+# skillrig binary reads this and fails clearly against an incompatible origin.
+convention_version = 1
+
+# Identity of this origin in OWNER/REPO grammar. Recorded into consumers' locks.
+origin = "my-org/my-skills"
+
+# Where skills live, relative to repo root. add/verify read skills/<name>/.
+skills_dir = "skills"

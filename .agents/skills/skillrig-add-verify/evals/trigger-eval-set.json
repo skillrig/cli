@@ -1,0 +1,22 @@
+[
+  { "query": "Our skills library is configured for this repo — how do I vendor the terraform-plan-review skill into it with skillrig?", "should_trigger": true },
+  { "query": "I want to pull in an agent skill from our org library and lock it to the approved version. How?", "should_trigger": true },
+  { "query": "How do I add a CI check that the skills committed in our repo haven't been modified from what was approved?", "should_trigger": true },
+  { "query": "skillrig verify failed in CI and exited 2 — what does that mean and which skills are the problem?", "should_trigger": true },
+  { "query": "make sure nobody secretly edited one of our agent skills before we merge", "should_trigger": true },
+  { "query": "verify is reporting one of my skills as 'orphan' and another as 'dirty' — what do those mean and how do I fix them?", "should_trigger": true },
+  { "query": "someone changed .agents/skills/terraform-plan-review locally and now I want to restore the original from our library", "should_trigger": true },
+  { "query": "does skillrig verify fail if the CLI a skill needs (like terraform) isn't installed on the runner?", "should_trigger": true },
+  { "query": "I re-ran skillrig add and it says 'refusing to overwrite' — how do I force it to take the origin's version?", "should_trigger": true },
+  { "query": "what's the difference between a mismatch and a dirty verdict in skillrig verify?", "should_trigger": true },
+  { "query": "How do I point this repo at our team's skills library acme/agent-skills with skillrig?", "should_trigger": false },
+  { "query": "skillrig says 'no origin configured' — how do I set the origin?", "should_trigger": false },
+  { "query": "What's the precedence between SKILLRIG_ORIGIN and the project config file?", "should_trigger": false },
+  { "query": "I want this repo to track the staging branch of our skills repo with skillrig init", "should_trigger": false },
+  { "query": "verify the SHA-256 checksum of this tarball I downloaded matches the release page", "should_trigger": false },
+  { "query": "how do I check that my last git commit is GPG-signed and verified on GitHub?", "should_trigger": false },
+  { "query": "configure golangci-lint to enable the gosec linter for our Go CLI", "should_trigger": false },
+  { "query": "write a table-driven unit test for a Go function that parses OWNER/REPO references", "should_trigger": false },
+  { "query": "how do I vendor my Go module dependencies with go mod vendor?", "should_trigger": false },
+  { "query": "add a new skill to my Claude Code setup by writing a SKILL.md from scratch", "should_trigger": false }
+]

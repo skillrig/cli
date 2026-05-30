@@ -42,3 +42,47 @@ exit 0/1/2-not-3 · add-detect+refuse-not-merge · conflict-markers-deferred · 
 
 - Artifacts are internally consistent — **clear to proceed to implementation** (`/specledger.implement-workflow` experiment, or `/specledger.tasks` for the durable ledger).
 - Re-run `/specledger.verify` after `tasks.md` exists if you want task-coverage + `TestQuickstart_*`-task mapping validated.
+
+---
+
+# Post-Implementation Adversarial Review — 2026-05-30
+
+**Scope:** an independent cold-context agent (Opus 4.8, xhigh) reviewed the **implemented** branch against the per-user-story DoD: it read every artifact, read the code (`pkg/skillcore`, `internal/cli`, tests), ran `make check`, and exercised the binary on the add→commit→verify→tamper round-trip plus edge probes. The agent was stopped just before it emitted its final compiled report; the findings below are **distilled from its complete in-flight analysis** (cross-checked against the code). *(Process note: this agent ran a git round-trip in the repo root by mistake — see AR-P. That motivated the clean-tree-before-review rule now added to `specledger.checkpoint-workflow`.)*
+
+## Findings
+
+| ID | New? | Category | Severity | Summary | Status |
+|----|------|----------|----------|---------|--------|
+| **AR-1** | confirms checkpoint #1 | Origin resolution | HIGH | **Local-origin lookup is split-brain.** `RepoRoot` is absolute (`git rev-parse --show-toplevel`) but `OriginDir` is a bare relative path (`my-org/my-skills`, from `originDirRef`), resolved against the **process CWD**. Running `add` from a **subdirectory** fails ("skill not found in origin") even though the origin checkout is correctly at the repo root — while the vendored files + lock would still target the repo root. Empirically confirmed. | Documented (checkpoint div #1); **CWD-relative resolution itself still unfixed** — hardening candidate noted in `contracts/add.md`. |
+| **AR-2** | **NEW** | Errors-as-navigation (FR-019) | **HIGH** | **A missing origin checkout is indistinguishable from a typo'd skill name.** `add.go` (`os.Stat(srcDir)`, ~L85-90) returns `SkillNotFoundError` on *any* stat error, so when the entire `./OWNER/REPO` checkout is absent (user ran `init` but never cloned it), the user gets *"skill … not found in origin → check the skill name"* — actively misleading. The two failure classes (origin-dir-absent vs skill-subdir-absent) must be distinguished (cli.md Principle 2). | **Open.** |
+| **AR-3** | **NEW** | Test tier (Constitution III) | MEDIUM | **No `pkg/skillcore/verify_test.go`.** The headline gate's logic — status taxonomy (`ok/mismatch/orphan/missing/dirty`), counts, all-findings aggregation, dirty-before-mismatch precedence — is covered **only** by black-box integration tests, with no presentation-free unit test. The two-tier discipline is met for `add`/`treesha`/`lock`/`manifest` but not for `verify`. | **Open.** |
+| **AR-4** | **NEW** (tied to AR-1/AR-2) | Skill accuracy | LOW | The new `skillrig-add-verify` skill understates the CWD-relative fragility ("relative to where you run add (your repo root)") and repeats the misleading *"not found → check the name"* error mapping without the "or the origin checkout is missing" case. | **Open** (fix with AR-1/AR-2). |
+| **AR-5** | — | Doc drift | LOW | `data-model.md` sample tree-SHA `c967789…` is stale vs the actual fixture (`40e4cad…`). Documented as "representative, not canonical"; tests recompute via raw git, so **not** a correctness bug. | Optional cleanup. |
+
+## Positives confirmed (independently verified)
+
+- **AP-04 upheld:** the only `git` shelling outside `pkg/skillcore` is `gitToplevel` in `internal/cli/repo.go` (repo-root discovery, *not* tree-SHA). All tree-SHA / lock / manifest logic lives solely in `pkg/skillcore`. No parallel implementation.
+- **Tree-SHA covers additions, not just byte edits:** an untracked stowaway file inside a locked skill → `dirty`; a committed stowaway → `mismatch`. Correct.
+- **Verdict taxonomy is sound,** including `dirty`-before-`mismatch` precedence and working-tree-deletion → `dirty` (exit 2) — both judged defensible/by-design.
+- **Round-trip verified live:** clean → exit 0; uncommitted tamper → `dirty` (2); committed tamper → `mismatch` (2); empty `.agents/skills` + lock entry → `missing` (2).
+- **`make check` green**, `cli.md` correctly synced this branch (verify integrity-only, `pkg/skillcore` as separate public package, exit 3 reserved).
+
+## Cleared (false alarms the agent self-corrected)
+
+- **Wrong-`lockfileVersion` exit code:** initially looked like exit 0, but that was **pipe-masking** (`head` exit, not `skillrig`); true exit is **1**. No bug.
+- **`lock_test.go` hard-coded SHAs:** used only as write→read serialization round-trip fixtures, not asserted against real git output — harmless (no circular oracle).
+
+## Observation (not a finding)
+
+Running `skillrig verify` inside the `skillrig-cli` repo itself reports all ~17 of its own vendored agent skills as `orphan` (it has no committed `.skillrig/skills-lock.json`) — expected behavior, but a reminder that this repo is not yet self-managed by `skillrig`.
+
+## AR-P — Process incident (review harness)
+
+The first review agent's manual round-trip used a `cd "$WORK"` that silently no-op'd (empty var), so `git add -A && git commit -m vendor` ran in the **repo root**, creating a stray commit; the agent then `git reset --soft` back to `e0d8ccd`. No file contents or real commits were lost, but the **staging area was disturbed**. **Mitigation adopted:** require a clean/committed working tree *before* launching a review agent (the agent may freely run git to test) — now documented in `.agents/commands/specledger.checkpoint-workflow.md`.
+
+## Recommended actions before merge
+
+1. **[HIGH] AR-2** — distinguish "origin checkout missing" from "skill not found" in `add` (a dedicated error + fix hint). Cheap, high-value.
+2. **[HIGH] AR-1** — decide the CWD-vs-repo-root resolution: make `OriginDir` repo-root-relative (robust; tests still pass since root==CWD there), or document "run `add` from the repo root" prominently. Currently only a follow-up note.
+3. **[MEDIUM] AR-3** — add `pkg/skillcore/verify_test.go` (stub the git client; table-drive the status taxonomy + counts + aggregation).
+4. **[LOW] AR-4 / AR-5** — fold the AR-1/AR-2 nuance into the `skillrig-add-verify` skill; refresh the stale data-model sample SHA.

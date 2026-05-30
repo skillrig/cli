@@ -40,8 +40,8 @@ skillrig — rig up your agents with skills (git-native skill distribution)
 
 Commands:
   search   Query the origin's index.json for skills
-  add      Vendor a skill into this repo + write the lock entry
-  verify   Offline integrity + prereq check (exit code; CI gate)
+  add      Vendor a skill into this repo + write the lock entry        [implemented]
+  verify   Offline integrity check — label-honesty (exit code; CI gate) [implemented]
   bump     Detect upstream advance, open an upgrade PR
   global   Manage global-scope skills (fetch/restore)
   doctor   Superset health check (integrity + prereqs + auth)
@@ -204,8 +204,8 @@ Exit codes are **load-bearing** here, not cosmetic: `verify` and `lint` are dete
 |------|---------|
 | 0 | Pass (including empty results) |
 | 1 | Usage / config error (bad args, no origin configured) |
-| 2 | Verification failure — label-honesty mismatch, orphan (on-disk ≠ locked), or unresolved conflict markers |
-| 3 | Prerequisite failure — a `[[requires]]` tool missing/unsatisfied or unauthenticated (fail in CI; may warn for humans) |
+| 2 | Verification failure — label-honesty mismatch, orphan (on-disk ≠ locked), or unresolved conflict markers. **Active**: emitted by the implemented `verify`. |
+| 3 | Prerequisite failure — a `[[requires]]` tool missing/unsatisfied or unauthenticated (fail in CI; may warn for humans). **Reserved**: not emitted today; lands with `doctor` (`verify` is integrity-only). |
 
 No duration metadata — `verify`/`search`/`lint` run offline against committed files; there is no per-command network cost to report.
 
@@ -258,8 +258,8 @@ Every `skillrig` subcommand MUST identify which pattern(s) it follows. This clas
 | Pattern | Purpose | Examples | Constraints |
 |---------|---------|----------|-------------|
 | **Query** | Deterministic read of the discovery artifact | `search` | Offline. Reads committed `index.json`. Deterministic tag filtering — **no inference** (N6). |
-| **Vendor Mutation** | Write skill tree + lock entry | `add`, `bump --pr` | Writes lock via `skillcore` only. Supports `--dry-run`; refuses to clobber content that diverges from the locked `treeSha` without `--force`. `bump` *proposes* (opens a PR), never force-adopts (R13). MUST never silently discard local edits (R32). |
-| **Verification Gate** | Offline integrity / prereq / conformance | `verify`, `lint` | MUST be offline + deterministic. Exit-code driven. **No live/online signal in this path** (R11/N1). `verify` = consumer CI gate; `lint` = author CI gate on the origin. |
+| **Vendor Mutation** | Write skill tree + lock entry | `add` *(implemented)*, `bump --pr` | Writes lock via `skillcore` only. Supports `--dry-run`; refuses to clobber content that diverges from the locked `treeSha` without `--force`. `bump` *proposes* (opens a PR), never force-adopts (R13). MUST never silently discard local edits (R32). |
+| **Verification Gate** | Offline integrity / prereq / conformance | `verify` *(implemented — integrity-only)*, `lint` | MUST be offline + deterministic. Exit-code driven. **No live/online signal in this path** (R11/N1). `verify` = consumer CI gate; `lint` = author CI gate on the origin. As implemented, `verify` is **integrity-only** (label-honesty + orphan detection, exit 2); prerequisite/eligibility checks (a missing `[[requires]]` tool → exit 3) belong to the future `doctor`, so `verify` does not emit exit 3 today. |
 | **Environment** | Health, auth, config, bootstrap | `doctor`, `init` | MUST be idempotent. `doctor` checks prerequisite auth (R18); works without a fully-configured project. `init` is **consumer-side only** — binds to an *existing* origin, never bootstraps one (architecture §2d). |
 | **Global Management** | Fetch/restore user-scope skills | `global add`, `global verify` | Genuinely *fetches and materializes* (the restore mode project scope doesn't need, §3). Touches per-environment home dirs, never the repo's project lock (R8). |
 
@@ -271,7 +271,7 @@ Each pattern has a distinct failure mode expectation:
 |---------|-------------|
 | **Query** | MUST fail with clear error + suggested fix (e.g. no origin → run `init`). |
 | **Vendor Mutation** | MUST validate origin + auth before fetching. Three-way-merge conflict → non-zero exit, write git-style conflict markers, instruct resolve-and-rerun (architecture §5b). Never discard local edits. |
-| **Verification Gate** | MUST be deterministic pass/fail by exit code. Label-honesty mismatch = fail; orphan = fail; unresolved conflict markers = fail; prereq miss = fail in CI / may warn for humans. |
+| **Verification Gate** | MUST be deterministic pass/fail by exit code. Label-honesty mismatch = fail (exit 2); orphan = fail (exit 2); unresolved conflict markers = fail. Prereq miss (exit 3) is reserved for the future `doctor` — the implemented `verify` is integrity-only and does not emit it. |
 | **Environment** | MUST be idempotent and safe to retry. MUST distinguish "tool missing" from "tool exists but unauthenticated" (R18). |
 | **Global Management** | MUST fetch/restore what's missing and report drift between the global lock and what's materialized. |
 
@@ -331,9 +331,9 @@ return fmt.Errorf("add failed: %s\n→ Check the origin: 'cat .skillrig/config.t
 sha := myLocalTreeHash(dir)            // in bump
 sha := someOtherHash(dir)              // in verify
 
-// Right: exactly ONE implementation, in internal/skillcore, called by
-//        verify, bump, AND doctor. Make it a hard internal boundary
-//        (architecture §2: "the two interfaces cannot diverge").
+// Right: exactly ONE implementation, in the public pkg/skillcore package
+//        (SDK-1), called by add, verify, AND future bump/doctor. Make it a
+//        hard boundary (architecture §2: "the two interfaces cannot diverge").
 sha := skillcore.TreeSHA(dir)
 ```
 
@@ -378,9 +378,9 @@ Inside the CLI, there are two conceptual layers:
 └─────────────────────────────────────────────┘
 ```
 
-The execution layer handles command routing, the shared `skillcore` primitives (tree-SHA computation, `skill.toml` / lock parsing), index comparison for `bump`, and lock I/O. The presentation layer formats output for the consumer (human or agent). These are not separate packages — they're a design concern within each command's `runXxx()` function.
+The execution layer handles command routing, the shared `skillcore` primitives (tree-SHA computation, `skill.toml` / lock parsing), index comparison for `bump`, and lock I/O. The presentation layer formats output for the consumer (human or agent). The presentation/execution split itself is a design concern within each command's `runXxx()` function — but the integrity primitives are **not** inline: `skillcore` is a separate, importable **public package** (`pkg/skillcore`, per SDK-1), so third-party Go tools can build their own `add`/`verify` on the same primitives the CLI uses.
 
-**Key rule**: Execution logic must not depend on output format. The same data path serves both `--json` and human output. And per AP-04, there is exactly one `skillcore` implementation of the integrity primitives — `verify`, `bump`, and `doctor` all dispatch to it so the gate can never diverge from what CI wrote. If an MCP surface for agents is ever added, it dispatches to `skillcore` too — never a parallel implementation (architecture §2).
+**Key rule**: Execution logic must not depend on output format. The same data path serves both `--json` and human output. And per AP-04, there is exactly one `skillcore` implementation of the integrity primitives — the public `pkg/skillcore` package — that `add` and `verify` (and future `bump`/`doctor`) all dispatch to, so the gate can never diverge from what CI wrote. If an MCP surface for agents is ever added, it dispatches to `pkg/skillcore` too — never a parallel implementation (architecture §2).
 
 ---
 

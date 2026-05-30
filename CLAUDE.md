@@ -63,7 +63,9 @@ Scripts and agents branch on them, so meanings are fixed (`internal/cli/exit.go`
 
 Features follow SpecLedger: **Specify → Clarify → Plan → Tasks → Review → Implement**, with artifacts under `specledger/<NNN-feature>/` (spec, plan, tasks, quickstart, contracts, data-model). Quickstart scenarios are the acceptance contract (each maps to a `TestQuickstart_<scenario>` integration test) and are written during planning.
 
-**Read `AGENTS.md` before tracking work or committing.** It defines the two repo-specific operating rules this project enforces: (1) all work-item tracking goes through the built-in `sl issue` CLI (issues stored per-spec in `specledger/<spec>/issues.jsonl`) — **never** ad-hoc markdown TODO lists; and (2) the commit/PR conventions (conventional prefixes, imperative ≤72-char subjects, testing evidence in PRs). It exists so task tracking and history stay in one git-friendly system rather than fragmenting across tools — consult it for the exact commands and the precise scope of each rule.
+**Commit & PR conventions.** Conventional prefixes (`feat:`, `fix:`, `chore:`, `docs:`), imperative subjects ≤72 chars, scoped to the feature (e.g. `docs(002): …`). Reference related issues in the body; call out migrations / new binaries explicitly. PRs carry a concise summary + testing evidence (`make test-unit`, `make test-integration`) and a CLI transcript when behavior changes.
+
+**Work-item tracking.** The durable, team-visible record lives in the SpecLedger issue tracker — `sl issue`, stored per-spec in `specledger/<spec>/issues.jsonl` (committed to git). The agent's in-session task list (the `Task*` tools) is an ephemeral execution aid, not a substitute for that committed record.
 
 <!-- >>> specledger-generated -->
 <!-- Auto-managed by specledger - do not edit this section -->

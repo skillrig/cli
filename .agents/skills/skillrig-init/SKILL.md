@@ -86,6 +86,24 @@ SKILLRIG_ORIGIN  >  project .skillrig/config.toml (nearest ancestor)  >  global 
 The project lookup walks **up** from the working directory, so any subdirectory of a
 bound repo resolves the same origin.
 
+## Local origin (this release)
+
+`init` records only an `OWNER/REPO[@REF]` **reference** — never a filesystem path (passing
+a path fails with `invalid origin … expected OWNER/REPO[@REF]`). In this release there is no
+network fetch, so when a later command (`skillrig add`) needs the origin's files it reads
+them from a **local git checkout at `./OWNER/REPO`, relative to where you run the command**
+(your repo root). So to vendor from a local copy of `my-org/my-skills`:
+
+```
+skillrig init --origin my-org/my-skills        # records the reference
+git clone <library> my-org/my-skills           # the checkout add reads from (./my-org/my-skills)
+echo 'my-org/' >> .git/info/exclude            # keep it out of your repo's index
+skillrig add <skill>                           # reads ./my-org/my-skills/skills/<skill>/
+```
+
+`@REF` selects the revision (default `HEAD`). Fetching a remote origin over the network is a
+later, additive mode. See `skillrig add --help` for the vendoring side.
+
 ## JSON Output
 
 `skillrig init --origin my-org/my-skills --json` emits a single object with all keys
