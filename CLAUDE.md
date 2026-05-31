@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `skillrig` is a single, generic, **consume-only** Go CLI for pointing a repo (or a per-user default) at an **origin** — the `OWNER/REPO[@REF]` that hosts an org's agent skills — and managing vendored skills from it. The same binary serves humans, agents, and CI. There is no `publish`/`login` and no write credential in the binary: GitHub is the authority plane ("publishing" = a PR to the origin).
 
+> **DEPRECATED — the sibling `skill.toml` manifest.** As of **003 (spike S1)**, a skill's machine metadata lives in its **`SKILL.md` YAML frontmatter** following the [agentskills.io](https://agentskills.io) standard — standard keys (`name`, `description`, `license`, …) at top level, and skillrig-specific data (`version`, `namespace`, `convention-version`, `topics`, `requires`) under the standard's free-form `metadata` map, namespaced as **`metadata.x-skillrig.*`** (parsed with `gopkg.in/yaml.v3`). The old `skill.toml` sibling file is **removed**; do not reintroduce it. Likewise the historical `[[requires]]` TOML notation in `docs/ARCHITECTURE-v0.md` now means **`metadata.x-skillrig.requires`** (a YAML list) in the frontmatter. `go-toml/v2` is retained ONLY for `.skillrig/config.toml`/`.skillrig-origin.toml`, never for skill manifests.
+
 Two design documents are binding and override general instincts:
 - `.specledger/memory/constitution.md` — development principles (spec-first, quickstart-as-contract, YAGNI, skill–CLI co-evolution).
 - `docs/design/cli.md` — the CLI design contract (progressive discovery, errors-as-navigation, two-level output, standard flags, exit codes, command-pattern classification). A CLI behavior change must update this file in the same branch.
