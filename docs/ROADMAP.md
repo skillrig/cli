@@ -28,10 +28,9 @@ resolver — AP-04 / AP-06) and layers thin commands on top.
 
 | # | Feature branch | Pattern | Depends on | Status |
 |---|----------------|---------|------------|--------|
-| 001 | **`init` + origin resolution** — `env SKILLRIG_ORIGIN > .skillrig/config.toml > ~/.config/skillrig/config.toml`; `skillrig init [--origin] [--global]` binds an existing origin (never bootstraps) | Environment | — (project skeleton) | 🚧 |
-| 002 | **`skillcore` + `add` (local) + `verify`** — git tree-SHA + `skill.toml` parse; **local-origin** `add` (vendor subtree + lock; `--dry-run`/`--force`); offline label-honesty + orphan check; **exit codes 0/1/2** (exit 3 → `doctor`/005) | Vendor Mutation + Verification Gate | 001 | ⬜ |
-| 003 | **`search`** — read origin (branch aware) committed `index.json`, deterministic tag filter, Two-Level Output | Query | 001 | ⬜ |
-| 004 | **`add` — remote origin fetch** — network fetch from a GitHub-hosted origin (partial-clone + sparse-checkout) + auth; `@ref`/`--pin` immutable pins (local-origin `add` already shipped in 002) | Vendor Mutation | 002 | ⬜ |
+| 001 | **`init` + origin resolution** — `env SKILLRIG_ORIGIN > .skillrig/config.toml > ~/.config/skillrig/config.toml`; `skillrig init [--origin] [--global]` binds an existing origin (never bootstraps) | Environment | — (project skeleton) | ✅ |
+| 002 | **`skillcore` + `add` (local) + `verify`** — git tree-SHA + manifest parse; **local-origin** `add` (vendor subtree + lock; `--dry-run`/`--force`); offline label-honesty + orphan check; **exit codes 0/1/2** (exit 3 → `doctor`/005) | Vendor Mutation + Verification Gate | 001 | ✅ |
+| 003 | **Discover & Acquire — `search` + remote `add` + `index`** (the 003+004 merge — see note below) — `search` reads the origin's committed `index.json` (query-first token-AND over name/description/topics + `--topic` filter, deterministic order, Two-Level Output); **remote `add`** fetches the skill subtree from a GitHub-hosted origin (sparse `git` clone + token via `os.exec`) with `--pin <ref>` immutable pins (local-origin `add` shipped in 002 — `add` now serves both forms); **`index`** is the origin-side generator that produces the catalog from each skill's `SKILL.md` frontmatter. Commit 1 migrates the manifest from `skill.toml` → `SKILL.md` frontmatter (`gopkg.in/yaml.v3`). | Query + Vendor Mutation + origin-side generator | 002 | 🚧 |
 | 005 | **backing-CLI prereqs** — `[[requires]]` declare + verify (`--eligible`-style readiness, auth-as-distinct-failure R18); mise consumption via per-CLI tagged releases + template-generated `mise.toml` | (extends verify/doctor) | 002 | ⬜ |
 | 006 | **`doctor`** — superset health check (integrity + prereqs + auth) | Environment | 002, 005 | ⬜ |
 | 007 | **`bump --pr`** — detect upstream advance, drift-aware three-way-merge, open reviewable PR (conflict markers + non-zero exit on conflict) | Vendor Mutation | 002, 004 | ⬜ |
@@ -41,12 +40,17 @@ resolver — AP-04 / AP-06) and layers thin commands on top.
 | 011 | **`skills.sh`** — support Vercel's skill.sh hosted skills. External skill adoption workflow (federated skill registries, whitelisted in origin, origin policy provisions for approval/review (skills.sh are evaluated on their usage statistics and audit reports, they should vetted or flagged with warnings)) | Evolution | 002 | ⬜ |
 | 012 | **`aws`** — ENTERPRISE - support Private AWS AgentRegistry hosted skills | Evolution | 002 | ⬜ |
 
+> **003 + 004 merged into one slice (decided 2026-05-31, FR-024).** The original roadmap split `search` (003) from remote-`add` fetch (004). They ship together because they share the same new machinery — the remote-fetch layer, the auth/token resolver, and (critically) the **catalog**: `search` is meaningless against a catalog that nothing generates, and the shipped `build-index.sh` provably drifts (it drops `topics`/`requires`). So the merged slice also pulls in the origin-side **`index`** generator (reversing the original "consume-only, roadmap a generator" lean — `index` reuses the consumer's `ParseManifest`, so it's a thin walk+marshal, AP-04 by construction) and the **manifest migration** to `SKILL.md` frontmatter. The slice keeps the branch id **003**; there is no separate 004 — the numbers below (005–012) are unchanged.
+>
+> **Local-vs-remote reframe.** 002's `add` overloaded `OWNER/REPO` as a *local directory* (`<consumerRepoRoot>/OWNER/REPO`) and ran `git -C` on that working tree. 003 splits the two origin forms cleanly: a **path-shaped** origin operates on a local checkout (002 behavior, generalized to a real filesystem path), while a bare **`OWNER/REPO`** is fetched remotely. There is no "both present" precedence — the tool never creates or caches a local copy of a remote origin.
+
 **Cross-cutting v0 commitments** (architecture §13):
 - Two scopes only — project (vendored, verify-only) + global (fetch/restore). **No "shared" middle tier.**
-- Lockfile carries `commit` (provenance) + `treeSha` (label honesty); the per-skill **manifest** (not the lock) carries `[[requires]]` — the vendored manifest is the single source of truth (002 D4; reconciles §4.2). `.skillrig/config.toml` (input) split from `.skillrig/skills-lock.json` (output) (§2d).
-- Origin = git; **no auth of its own** (§2d).
+- The per-skill **manifest is `SKILL.md` frontmatter** (agentskills.io standard fields + skillrig extensions under `metadata.x-skillrig.*`; `skill.toml` is dropped as of 003). The frontmatter is the single field-source for both the catalog (`index`) and `add`/`verify` (§4.1).
+- Lockfile carries `commit` (provenance) + `treeSha` (label honesty) + the resolved human-readable `version`/tag; the per-skill **manifest** (not the lock) carries `requires` — the vendored manifest is the single source of truth (002 D4; reconciles §4.2). `.skillrig/config.toml` (input) split from `.skillrig/skills-lock.json` (output) (§2d).
+- Origin = git; **no auth of its own** for the origin contract — a private origin is fetched with a **read-only** token resolved via `os.exec` (`GH_TOKEN` > `GITHUB_TOKEN` > `gh auth token`); still no write credential in the binary (§2d, §8b.2).
 - One **batteries-included GitHub template** (skills + Go-monorepo backing-CLI pattern + index/lint/release workflows) (§2d).
-- Discovery via committed `index.json`; **deterministic tags ship in the manifest** (data only) (§9).
+- Discovery via committed `index.json`, **generated by `skillrig index` on merge to `main`** (single-tip, full-regenerate — not "on release"); **deterministic `topics` ship in the manifest** (data only; `topics` renamed from `tags`) (§9).
 - Orphan protection effectively free at the `verify` gate — on-disk set must equal locked set (§9b).
 - Supply-chain posture: recommend immutable releases + tag protection on the origin (§9b).
 
@@ -81,7 +85,7 @@ Each is justified only if its trigger fires; recorded here so they aren't silent
 
 ## Explicitly *not* built (maps to requirements §5 / architecture §10)
 
-- **Team→skill suggestion engine (D1):** tags ship now (R24); suggestion UX is v1, additive, deterministic-only.
+- **Team→skill suggestion engine (D1):** `topics` ship now (R24); suggestion UX is v1, additive, deterministic-only.
 - **Onboarding wizard (D2):** docs + PR template only.
 - **Browse UI (D3):** deferred to v1 over the same `index.json`.
 - **Client tiers (D4):** single-track v0; a deployment concern if it ever matters.

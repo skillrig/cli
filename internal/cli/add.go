@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -16,6 +17,7 @@ import (
 type addCmd struct {
 	opts   *globalOpts
 	skill  string
+	pin    string
 	dryRun bool
 	force  bool
 
@@ -40,20 +42,29 @@ func newAddCmd(opts *globalOpts) *cobra.Command {
 		Short: "Vendor a skill from your configured origin into .agents/skills/",
 		Long: "Vendor a named skill from this repo's configured origin into the canonical\n" +
 			".agents/skills/<skill>/, recording its identity (version, commit, tree-SHA, path)\n" +
-			"in .skillrig/skills-lock.json. add is offline and consume-only: it resolves the\n" +
-			"active origin (SKILLRIG_ORIGIN > project > global) exactly like every command and\n" +
-			"copies the skill byte-identically, injecting nothing.\n\n" +
-			"Local origin (this release): the configured origin OWNER/REPO is read from a local\n" +
-			"git checkout at <repo-root>/OWNER/REPO — resolved against the repo root, so add\n" +
-			"works from any subdirectory — not over the network. So `init --origin my-org/my-skills`\n" +
-			"expects that library checked out at <repo-root>/my-org/my-skills; keep it out of your\n" +
-			"index (e.g. echo 'my-org/' >> .git/info/exclude). Fetching a remote origin is a later,\n" +
-			"additive mode.\n\n" +
+			"in .skillrig/skills-lock.json. add is consume-only: it resolves the active origin\n" +
+			"(SKILLRIG_ORIGIN > project > global) exactly like every command and copies the\n" +
+			"skill byte-identically, injecting nothing.\n\n" +
+			"Two acquisition forms, chosen automatically and reported in the result:\n" +
+			"  • Local — the configured origin OWNER/REPO is checked out at <repo-root>/OWNER/REPO;\n" +
+			"    add reads that local checkout (resolved against the repo root, so it works from\n" +
+			"    any subdirectory) — no network. Keep the checkout out of your index\n" +
+			"    (e.g. echo 'my-org/' >> .git/info/exclude).\n" +
+			"  • Remote — no local checkout exists; add fetches the skill subtree over git from\n" +
+			"    the origin OWNER/REPO at the origin's @ref (or --pin), using a GitHub token from\n" +
+			"    GH_TOKEN / GITHUB_TOKEN / `gh auth token` when one is available (public origins\n" +
+			"    need none).\n\n" +
+			"--pin acquires an immutable version instead of the origin's branch tip: a bare\n" +
+			"semver (v1.4.0 / 1.4.0) expands via the origin's tag scheme to <skill>-v<semver>;\n" +
+			"anything else is a literal git ref (a full tag or commit SHA). Both forms of the\n" +
+			"same release resolve to the same content.\n\n" +
 			"add is idempotent on identical content and refuses to overwrite a vendored skill\n" +
 			"whose on-disk content diverges from the lock unless you pass --force. Requires a\n" +
 			"git repository; commit the result, then run skillrig verify.",
-		Example: "  # Vendor a skill from your configured origin (a local checkout at ./OWNER/REPO)\n" +
+		Example: "  # Vendor a skill from your configured origin\n" +
 			"  skillrig add terraform-plan-review\n\n" +
+			"  # Pin an immutable version (bare semver — expands via the origin's tag scheme)\n" +
+			"  skillrig add terraform-plan-review --pin v1.4.0\n\n" +
 			"  # Preview what would be vendored, writing nothing\n" +
 			"  skillrig add terraform-plan-review --dry-run\n\n" +
 			"  # Overwrite a locally-diverged copy with the origin's content\n" +
@@ -75,6 +86,7 @@ func newAddCmd(opts *globalOpts) *cobra.Command {
 		},
 	}
 
+	cmd.Flags().StringVar(&ac.pin, "pin", "", "acquire an immutable version: a bare semver (v1.4.0) expands via the origin tag scheme, else a literal tag/SHA")
 	cmd.Flags().BoolVar(&ac.dryRun, "dry-run", false, "report what would be vendored and recorded; write nothing")
 	cmd.Flags().BoolVar(&ac.force, "force", false, "overwrite a vendored skill whose on-disk content diverges from the lock")
 
@@ -104,29 +116,77 @@ func (ac *addCmd) run(cmd *cobra.Command) error {
 		return usageNotGitRepo(addNotGitRepoWhy, err)
 	}
 
-	originDir, ref := originDirRef(res.Origin)
-	// AR-1: anchor the local origin checkout to the repo root, not the process
-	// CWD. The destination (.agents/skills + the lock) is already repo-root-anchored
-	// via repoRoot; leaving the origin source relative made `add` resolve it against
-	// the CWD, so it failed from any subdirectory while the output still went to the
-	// repo root. Joining with repoRoot makes both sides consistent — `add` now works
-	// from anywhere in the repo.
-	originDir = filepath.Join(repoRoot, originDir)
+	opts := addOptionsFor(res.Origin, repoRoot, ac)
 
-	result, err := skillcore.Add(skillcore.AddOptions{
-		OriginDir: originDir,
-		Ref:       ref,
-		Skill:     ac.skill,
-		RepoRoot:  repoRoot,
-		Origin:    res.Origin.String(),
-		Force:     ac.force,
-		DryRun:    ac.dryRun,
-	})
+	result, err := skillcore.Add(opts)
 	if err != nil {
-		return mapAddError(ac.skill, err)
+		return mapAddError(ac.skill, res.Origin.String(), err)
 	}
 
 	return renderAddResult(cmd.OutOrStdout(), result, ac.opts.json)
+}
+
+// addOptionsFor classifies the resolved origin's acquisition form (D3) and builds
+// the skillcore.AddOptions for it. The form is chosen automatically:
+//
+//   - a file:// / filesystem-path LOCAL origin → remote-fetch form over a real
+//     git transport against that path (RepoURL = origin.CloneURL(), Local), so a
+//     local origin and the file:// test substrate are fetched without a checkout;
+//   - a remote OWNER/REPO checked out at <repo-root>/OWNER/REPO → the 002
+//     local-copy form reading that checkout;
+//   - a remote OWNER/REPO with no checkout → remote-fetch form over GitHub.
+//
+// --pin and the destination/lock fields are common to all. skillcore gates the
+// origin's convention before vendoring in the remote-fetch forms (FIX-4).
+//
+// AR-1: the local checkout is anchored to the repo root, not the process CWD — the
+// destination (.agents/skills + the lock) is already repo-root-anchored via
+// repoRoot, so anchoring the source there too makes add work from any subdirectory.
+func addOptionsFor(origin config.Origin, repoRoot string, ac *addCmd) skillcore.AddOptions {
+	_, ref := originDirRef(origin)
+
+	opts := skillcore.AddOptions{
+		Ref:      ref,
+		Skill:    ac.skill,
+		RepoRoot: repoRoot,
+		Origin:   origin.String(),
+		Pin:      ac.pin,
+		Force:    ac.force,
+		DryRun:   ac.dryRun,
+	}
+
+	// A file:// / path LOCAL origin has no OWNER/REPO checkout; fetch it over a
+	// real git transport from its CloneURL (FR-011 + file:// substrate).
+	if origin.IsLocal() {
+		opts.RepoURL = origin.CloneURL()
+		opts.Local = true
+
+		return opts
+	}
+
+	originDir, _ := originDirRef(origin)
+	localCheckout := filepath.Join(repoRoot, originDir)
+
+	if isLocalCheckout(localCheckout) {
+		opts.OriginDir = localCheckout
+
+		return opts
+	}
+
+	// Remote form: setting Owner+Repo selects skillcore's remote-fetch path
+	// (the catalog/conventional skills/<skill> subtree is resolved by skillcore).
+	opts.Owner = origin.Owner
+	opts.Repo = origin.Repo
+
+	return opts
+}
+
+// isLocalCheckout reports whether dir is a directory on disk — the signal that the
+// origin is checked out locally, selecting the local-copy form over a remote fetch.
+func isLocalCheckout(dir string) bool {
+	info, err := os.Stat(dir)
+
+	return err == nil && info.IsDir()
 }
 
 // addNotGitRepoWhy is the project-scope rationale for add's not-a-repo error.
@@ -166,8 +226,11 @@ func usageNoOriginConfigured() *UsageError {
 
 // mapAddError maps skillcore's typed Add errors to navigational *UsageError
 // values (exit 1), authoring the what/why/fix prose while preserving the raw
-// cause for --verbose. An unexpected error is wrapped generically.
-func mapAddError(skill string, err error) error {
+// cause for --verbose. origin is the OWNER/REPO[@REF] reference, anchored in the
+// network/version error prose. An unexpected error is wrapped generically. All
+// classes here map to exit 1 — the reserved exit 2 (verification) and 3
+// (prerequisite) are never emitted from add.
+func mapAddError(skill, origin string, err error) error {
 	var invalidName *skillcore.InvalidSkillNameError
 	if errors.As(err, &invalidName) {
 		return &UsageError{
@@ -218,6 +281,36 @@ func mapAddError(skill string, err error) error {
 		}
 	}
 
+	var remoteNotFound *skillcore.NotFoundError
+	if errors.As(err, &remoteNotFound) {
+		return mapNotFoundError(skill, remoteNotFound, err)
+	}
+
+	var noVersion *skillcore.NoSuchVersionError
+	if errors.As(err, &noVersion) {
+		return &UsageError{
+			Msg: fmt.Sprintf("%q has no version %q\n", noVersion.Skill, noVersion.Ref) +
+				"why: the pin does not resolve to a released tag or a commit in the origin\n" +
+				"fix: run skillrig search for the current version, or --pin an existing tag",
+			Cause: err,
+		}
+	}
+
+	var authErr *skillcore.AuthError
+	if errors.As(err, &authErr) {
+		return mapAuthError(origin, err)
+	}
+
+	var unreachErr *skillcore.UnreachableError
+	if errors.As(err, &unreachErr) {
+		return mapUnreachableError(origin, err)
+	}
+
+	var convErr *skillcore.IncompatibleConventionError
+	if errors.As(err, &convErr) {
+		return mapConventionError(origin, convErr, err)
+	}
+
 	var gitErr *skillcore.GitError
 	if errors.As(err, &gitErr) {
 		return &UsageError{
@@ -229,4 +322,66 @@ func mapAddError(skill string, err error) error {
 	}
 
 	return &UsageError{Msg: "add failed\nwhy: " + err.Error(), Cause: err}
+}
+
+// mapNotFoundError renders a remote *NotFoundError (the origin or the skill
+// subtree is absent) as navigation. The D4 subtlety: GitHub returns "not found"
+// (not 403) for a PRIVATE repo reached with no resolved token, so when the fetch
+// was unauthenticated the fix adds the "if private, authenticate" hint — the
+// agent must not be sent to re-check a skill name when the real problem is a
+// missing credential. The raw *GitError is preserved for --verbose. Shared by
+// add and search.
+func mapNotFoundError(skill string, nf *skillcore.NotFoundError, cause error) error {
+	what := fmt.Sprintf("skill %q not found in the origin\n", skill)
+	if skill == "" {
+		what = "the origin was not found\n"
+	}
+
+	fix := "fix: run skillrig search to list the skills the origin publishes"
+	if !nf.Authenticated {
+		fix += "; if the origin is private, authenticate first (gh auth login, or set GH_TOKEN / GITHUB_TOKEN)"
+	}
+
+	return &UsageError{
+		Msg: what +
+			"why: no such skill is published, or the origin is private and the fetch was unauthenticated\n" +
+			fix,
+		Cause: cause,
+	}
+}
+
+// mapAuthError renders an *AuthError (a credential WAS presented and the origin
+// rejected it — distinct from the not-found-because-private class) as navigation.
+// Shared by add and search.
+func mapAuthError(origin string, cause error) error {
+	return &UsageError{
+		Msg: fmt.Sprintf("authentication failed reaching %s\n", origin) +
+			"why: the GitHub token presented was rejected (expired, revoked, or lacking access to a private origin)\n" +
+			"fix: refresh credentials with gh auth login, or set a valid GH_TOKEN / GITHUB_TOKEN",
+		Cause: cause,
+	}
+}
+
+// mapUnreachableError renders an *UnreachableError (the origin host could not be
+// resolved or connected to) as navigation. Shared by add and search.
+func mapUnreachableError(origin string, cause error) error {
+	return &UsageError{
+		Msg: fmt.Sprintf("could not reach %s\n", origin) +
+			"why: the origin host could not be resolved or connected to (offline, or a misspelled origin)\n" +
+			"fix: check your network connection and the origin spelling (OWNER/REPO)",
+		Cause: cause,
+	}
+}
+
+// mapConventionError renders an *IncompatibleConventionError as navigation. The
+// gate is exact-match (C1): the origin's catalog declares a convention this
+// binary does not implement (a higher, lower, or absent/zero value all fail), so
+// the fix is to align the tool and the origin. Shared by add and search.
+func mapConventionError(origin string, ce *skillcore.IncompatibleConventionError, cause error) error {
+	return &UsageError{
+		Msg: fmt.Sprintf("%s uses skill convention v%d (this tool supports exactly v%d)\n", origin, ce.Found, ce.Supported) +
+			"why: the origin's catalog declares a convention version this skillrig does not implement\n" +
+			"fix: update skillrig, or check the origin's .skillrig-origin.toml convention_version",
+		Cause: cause,
+	}
 }

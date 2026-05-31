@@ -1,0 +1,170 @@
+# Phase 1 — Data Model: `003-search-remote`
+
+Entities, fields, validation, and the ground-truth samples each is anchored to (Constitution III). All types live in `pkg/skillcore` (presentation-free). Field-source decisions trace to research.md D1–D8.
+
+---
+
+## 1. Skill manifest — `SKILL.md` frontmatter (was `skill.toml`) · D1
+
+A skill is a directory containing `SKILL.md` (agent-facing instructions) whose **YAML frontmatter** carries the machine metadata. `skill.toml` is removed.
+
+**Standard agentskills.io fields** (verbatim): `name`, `description` (+ `license`, `compatibility`, `allowed-tools` passed through, not consumed by skillrig this slice).
+**skillrig extensions** under the standard `metadata` map, namespaced `x-skillrig.*`:
+
+```yaml
+---
+name: terraform-plan-review
+description: Review a terraform plan for risk and drift.
+license: MIT
+metadata:
+  x-skillrig.namespace: my-org
+  x-skillrig.version: 1.4.0
+  x-skillrig.convention-version: "1"
+  x-skillrig.topics: [platform-team, terraform, aws]
+  x-skillrig.requires:
+    - tool: oxid
+      version: ">=0.4.0"
+      source: my-org/my-skills
+      manager: mise
+    - tool: terraform
+      version: ">=1.6"
+      source: hashicorp/terraform
+      manager: mise
+---
+# Terraform Plan Review
+<agent-facing instructions…>
+```
+
+**Go shape** (`manifest.go`, parsed with `gopkg.in/yaml.v3`):
+
+```go
+type Manifest struct {
+    Name        string   // standard frontmatter `name`
+    Description string   // standard frontmatter `description`
+    Namespace   string   // metadata."x-skillrig.namespace"
+    Version     string   // metadata."x-skillrig.version"
+    Convention  string   // metadata."x-skillrig.convention-version"
+    Topics      []string // metadata."x-skillrig.topics"  (renamed from tags — D8)
+    Requires    []Require // metadata."x-skillrig.requires"
+}
+type Require struct{ Tool, Version, Source, Manager string }
+```
+
+- **Parsing:** read the file, split the `---`-delimited frontmatter block, `yaml.Unmarshal` into a struct with a `map[string]any` `metadata`, then lift `x-skillrig.*` keys. Unknown keys ignored (forward-compat). Mirrors `gh`'s `internal/skills/frontmatter`.
+- **Validation:** `name` required and non-empty; `name` MUST equal the skill directory name (consistency, removes 002's duplication drift); `version` required for catalog entries; `topics` optional `[]string`.
+- **Risk (D1):** `x-skillrig.requires` is a nested list — validate against `skills-ref validate`; fall back to a JSON-encoded string value only if a strict validator rejects the nested form.
+- **Ground truth:** the migrated `/Users/vincentdesmet/specledger/skillrig/skillrig-origin/skills/terraform-plan-review/SKILL.md` (the real PoC skill, after the `skill.toml`→frontmatter fold).
+
+## 2. Library catalog — `index.json` · D2
+
+The origin's committed, machine-readable list of skills, produced by `skillrig index` and consumed by `search`. **Discovery-only** (no per-skill `commit`/`treeSha`). **Single-tip** (one entry per skill = the HEAD version).
+
+```jsonc
+{
+  "skillrigConvention": 1,            // contract/schema version — the binary gates on this (D-convention)
+  "origin": "my-org/my-skills",
+  "skills": [
+    {
+      "name": "terraform-plan-review",
+      "version": "1.4.0",             // from metadata.x-skillrig.version
+      "namespace": "my-org",
+      "description": "Review a terraform plan for risk and drift.",
+      "topics": ["platform-team","terraform","aws"],  // search --topic filters on these
+      "path": "skills/terraform-plan-review",         // from the directory
+      "requires": [ {"tool":"oxid","version":">=0.4.0","source":"my-org/my-skills"} ]
+    }
+  ]
+}
+```
+
+**Go shape** (`catalog.go`):
+
+```go
+type Catalog struct {
+    SkillrigConvention int           `json:"skillrigConvention"`
+    Origin             string        `json:"origin"`
+    Skills             []CatalogEntry `json:"skills"`
+}
+type CatalogEntry struct {
+    Name, Version, Namespace, Description string
+    Topics   []string
+    Path     string
+    Requires []Require
+}
+```
+
+- **Generation (`index`):** walk `<skills_dir>/*/SKILL.md`, `ParseManifest` each, project into `CatalogEntry` (`path` = dir relative to repo root), sort by `name` (determinism — SC-009), marshal with stable key order + trailing newline.
+- **Consumption (`search`):** parse; **gate `skillrigConvention`** with an **exact-match policy** (decided 2026-05-31, C1) — the binary supports **exactly** convention `1`; **any other value, including a lower version (`0`) or an absent/zero field, fails** with `IncompatibleConventionError` (FR-016), never partial results. (Exact-match is the YAGNI choice for v0; a forward/backward-compat window is a deliberate future change, not an accident of a `>`-only check.)
+- **Validation:** `skills` sorted by `name`, unique names; every entry has `name`/`version`/`path`.
+- **Determinism contract (SC-009):** `skillrig index` over a fixed skill set is byte-identical across runs; and `index`(origin fixture) == the committed `index.json` (ground-truth oracle).
+- **Ground truth:** the committed `/Users/vincentdesmet/specledger/skillrig/skillrig-origin/index.json` (regenerated by the new `index` from the migrated frontmatter).
+
+## 3. Lock entry — `.skillrig/skills-lock.json` · D5 (NO schema change)
+
+The existing `LockEntry` **already** carries `Version` — so recording the human-readable version/tag needs **no new field**; remote/pinned `add` simply populates `Version` with the **resolved tag/version**, `Commit` with the fetched commit, `TreeSha` with the computed subtree SHA.
+
+```go
+type LockEntry struct {
+    Version string `json:"version"` // resolved human-readable version/tag (D5)
+    Commit  string `json:"commit"`  // provenance — exact fetched commit
+    TreeSha string `json:"treeSha"` // label-honesty — computed from the fetched subtree
+    Path    string `json:"path"`    // .agents/skills/<skill>
+}
+```
+
+- **Local-path add (002):** `Version` ← manifest `version` (unchanged).
+- **Remote add:** `Version` ← the resolved tag for a `--pin` (e.g. `v1.4.0`), else the manifest `version` at the fetched ref; `Commit` ← `git rev-parse` of the fetched ref; `TreeSha` ← `skillcore.TreeSHA` of the vendored subtree (same code `verify` recomputes — AP-04).
+- **`--pin` resolution (C3, deterministic — single rule):** a bare semver (`^v?SEMVER$`) is **always** expanded via `tag_scheme` (`name-vSEMVER`) to `<skill>-v<semver>`; **any other value** is a literal git ref (full tag or commit SHA) passed through. So `--pin v1.4.0` and `--pin terraform-plan-review-v1.4.0` resolve to the *same* commit → identical `commit`/`treeSha` (SC-004); a 40-hex SHA is taken literally. A `--pin` that resolves to no existing ref → `NoSuchVersionError` (§5), distinct from a missing skill.
+- **Validation / `verify` (002, unchanged):** on-disk subtree tree-SHA must equal `TreeSha`; on-disk skill set must equal the locked set (orphan check).
+- **Ground truth:** a real `.skillrig/skills-lock.json` written by remote `add` against the `file://` bare-repo fixture, with `treeSha` cross-checked against raw `git ls-tree`.
+
+## 4. Origin reference & form · D3
+
+`config.Origin{Owner, Repo, Ref}` (001, unchanged grammar). New: a **classification** of the resolved origin into its form, decided in `internal/cli` (presentation/config layer) and passed to `skillcore`:
+
+| Form | Detected when | skillcore behavior |
+|---|---|---|
+| **Local path** | origin resolves to an explicit filesystem path (the configured value is a path, not `OWNER/REPO`) | operate on the local checkout (002 path, generalized to the real path) |
+| **Remote** | a bare `OWNER/REPO[@REF]` | `git clone --sparse` from `https://github.com/OWNER/REPO` at `REF` (D4/D7) |
+
+- No tool-managed cache; no "both present" precedence (D3). The chosen form is reported to the user (FR-011).
+- `@REF` = origin-level branch pointer (001); `--pin` = per-skill immutable tag/SHA (D5) — orthogonal.
+
+## 5. Typed errors · D4/D6 (extend `pkg/skillcore/errors.go`)
+
+Four new typed errors, **classified inside the fetch layer** (never in `cli`), rendered with what/why/fix by `internal/cli` (errors-as-navigation). The three network classes (`AuthError`/`UnreachableError`/`NotFoundError`) are classified from `GitError.Stderr`; `NoSuchVersionError` is raised from a failed `--pin` ref-resolution (the ref resolves to no tag/commit) — a **distinct type**, so `cli`/CI can branch on it rather than on prose (C2). All map to **exit 1** (usage/config class) this slice — exit 2/3 stay reserved.
+
+| Error | Trigger (git/gh stderr, exit 128) | cli rendering (what/why/fix) |
+|---|---|---|
+| `AuthError` | `Authentication failed` / `Invalid username or token` | "authentication failed reaching <origin>" / private origin + no valid token / `gh auth login` or set `GITHUB_TOKEN` |
+| `UnreachableError` | `Could not resolve host` / `Failed to connect` | "could not reach <origin>" / network/location / check connectivity & origin spelling |
+| `NotFoundError` | `repository '…' not found` (origin) or missing skill subtree | "<skill> not found in <origin>" / no such skill or private+unauthenticated / run `skillrig search`; **if private, authenticate** (the D4 subtlety: GitHub returns *not found* for private+no-token) |
+| `NoSuchVersionError` (C2) | a `--pin` ref that resolves to no existing tag/commit (distinct from a missing skill — the skill exists, the requested version does not) | "<skill> has no version <ref>" / the pin does not match a released tag or commit / run `skillrig search` for the current version, or pin an existing tag |
+| `IncompatibleConventionError` | `skillrigConvention != 1` (exact-match; includes a higher version, a lower version, and an absent/`0` field) | "origin uses convention vN (this tool supports exactly v1)" / tool/origin convention mismatch / update skillrig, or check the origin's `.skillrig-origin.toml` |
+
+Carried forward from 002 (unchanged): `OriginNotFoundError` (local-path form absent), `InvalidSkillNameError` (path-traversal guard), `SymlinkUnsupportedError`, `LockError`, `GitError` (raw, surfaced under `--verbose`).
+
+## 5b. Search matcher (in-memory, `pkg/skillcore`) · D8
+
+Not persisted state — a pure function over the fetched `Catalog`. `Search(catalog, query []string, topics []string) []CatalogEntry`:
+- **Match:** keep entries where every `query` term (lowercased) is a substring of `lower(name+" "+description+" "+join(topics))` AND every requested `topic` is present (case-insensitive exact membership).
+- **Order:** stable sort by descending relevance bucket {exact-name 3, name-substring 2, topic 1, description-only 0} then ascending `name` (unique → total order). Deterministic; **no** fuzzy/semantic/learned ranking (N6).
+- **Dependency:** stdlib only (`strings`, `slices`/`sort`). Scale: linear over tens–hundreds of entries (S5: index structures are YAGNI below ~10k docs).
+- **Ground truth:** table-driven unit tests in `pkg/skillcore` (query→ordered names); an integration determinism assert (two runs byte-identical).
+
+## 6. Token (transient, never persisted) · D4
+
+Not stored anywhere. `ResolveGitHubToken(hostname string) (string, bool)` returns the first of: `GH_TOKEN` env → `GITHUB_TOKEN` env → `os.exec("gh","auth","token","--hostname",hostname)` (exit 0 + non-empty). Injected per-fetch via `git -c http.extraHeader="Authorization: Basic <base64('x-access-token:'+token)>"`. `hostname` param exists so GHE is a one-line future extension (deferred).
+
+## Entity relationships
+
+```
+Origin (local path | remote OWNER/REPO@ref)
+  └─ index.json (Catalog)  ──generated by──>  skillrig index  <──ParseManifest── SKILL.md frontmatter (Manifest)
+        │  read by                                                                      │ fetched + hashed by
+        ▼                                                                               ▼
+     search (query + --topic filter)                                     add (remote fetch → vendor → LockEntry{version,commit,treeSha,path})
+                                                                                        │ checked by
+                                                                                        ▼
+                                                                                     verify (002, offline)
+```

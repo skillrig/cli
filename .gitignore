@@ -13,3 +13,8 @@ __pycache__/
 # OS / editor cruft
 .DS_Store
 *.swp
+
+# Secrets / captured traffic — NEVER commit (Qodo API token; HAR dumps may embed bearer tokens)
+qodo-auth.key
+*.key
+*.har

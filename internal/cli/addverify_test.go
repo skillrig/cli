@@ -76,7 +76,7 @@ func TestMapAddError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := mapAddError("x", tt.err)
+			got := mapAddError("x", "my-org/my-skills", tt.err)
 
 			var ue *UsageError
 			if !errors.As(got, &ue) {

@@ -39,9 +39,10 @@ $ skillrig
 skillrig — rig up your agents with skills (git-native skill distribution)
 
 Commands:
-  search   Query the origin's index.json for skills
+  search   Query the origin's index.json for skills                    [implemented]
   add      Vendor a skill into this repo + write the lock entry        [implemented]
   verify   Offline integrity check — label-honesty (exit code; CI gate) [implemented]
+  index    Generate the origin's index.json from skill frontmatter     [implemented, origin-side]
   bump     Detect upstream advance, open an upgrade PR
   global   Manage global-scope skills (fetch/restore)
   doctor   Superset health check (integrity + prereqs + auth)
@@ -73,14 +74,15 @@ fix: skillrig add <skill> (e.g. skillrig add terraform-plan-review); run skillri
 
 # `skillrig add --help` then reveals the full (shipped) surface:
 Usage:
-  skillrig add <skill> [--dry-run] [--force] [--json] [--verbose]
+  skillrig add <skill> [--pin <ref>] [--dry-run] [--force] [--json] [--verbose]
 
 Examples:
   skillrig add terraform-plan-review
+  skillrig add terraform-plan-review --pin v1.4.0
   skillrig add terraform-plan-review --dry-run
 ```
 
-> The origin is **resolved**, never passed to `add` (no `--from`/`--origin` arg — clarified 2026-05-30); immutable per-skill `--pin <ref>` is **deferred** (Out of Scope this slice). The synopsis above is the shipped surface.
+> The origin is **resolved**, never passed to `add` (no `--from`/`--origin` arg — clarified 2026-05-30). `add` now serves both a **local-path** origin (002) and a **remote** `OWNER/REPO` origin it fetches over `git` (003); the immutable per-skill `--pin <ref>` shipped with the remote path. The synopsis above is the shipped surface. See [Pin vs. branch ref](#origin-reference-grammar) for the `--pin` semantics.
 
 Progressive disclosure: **overview (injected) → usage (explored) → parameters (drilled down).** The agent discovers on-demand, each level providing just enough information for the next step.
 
@@ -106,6 +108,38 @@ fatal: repository 'https://github.com/my-org/my-skills' not found
 add failed: cannot reach origin 'my-org/my-skills' (git: repository not found).
 → Check the origin is correct: 'skillrig init --origin <OWNER/REPO>' or 'cat .skillrig/config.toml'
 → If the repo is private, this is usually auth — see 'gh auth status' / GITHUB_TOKEN.
+```
+
+**The remote-fetch failure classes are distinct typed errors (R17/R18, FR-016–019).** When `add`/`search` fetch a remote origin, three confusable failures must each map to their own error class so the agent debugs the right thing — never collapse them. They are classified inside `pkg/skillcore` from the raw `git` stderr (`AuthError` / `UnreachableError` / `NotFoundError`), then rendered with what/why/fix by `internal/cli`:
+
+```
+# AuthError — private origin, no/invalid credentials (git stderr: "Authentication failed" / "Invalid username or token")
+add failed: authentication to origin 'my-org/my-skills' failed (git: Authentication failed).
+→ Authenticate: 'gh auth login', or export a GITHUB_TOKEN / GH_TOKEN with read access to the origin.
+→ This is AUTH, not a missing/typo'd repo — the origin name resolved fine.
+
+# UnreachableError — network failure / wrong host (git stderr: "Could not resolve host" / "Failed to connect")
+search failed: origin 'my-org/my-skills' is unreachable (git: Could not resolve host github.com).
+→ Check connectivity / proxy / the host in the origin reference; retry.
+→ This is a network problem, not auth or a missing repo.
+
+# NotFoundError — origin (or skill) does not exist. PRIVATE-REPO SUBTLETY: GitHub returns
+# "not found" (not 403) for a private repo with no/bad token, so the fix names the auth path too.
+add failed: origin 'my-org/my-skills' not found (git: repository not found).
+→ Check the origin spelling: 'skillrig init --origin <OWNER/REPO>' or 'cat .skillrig/config.toml'.
+→ If this is a PRIVATE origin, authenticate via 'gh auth login' or set GITHUB_TOKEN — GitHub reports a private repo you can't see as "not found".
+```
+
+Keep the **convention-version** failure distinct from all three above — it means the origin is reachable and authenticated but speaks a layout this binary doesn't support:
+
+```
+# IncompatibleConventionError — origin's convention_version is not the supported value (exact-match == 1)
+add failed: origin 'my-org/my-skills' uses convention version 2, but this skillrig supports 1.
+→ Update skillrig to a build that supports this origin's convention, or point at a compatible origin.
+
+# NoSuchVersionError — a '--pin' that resolves to no git ref/tag (distinct from "skill not found")
+add failed: no version 'v9.9.9' of 'terraform-plan-review' in origin 'my-org/my-skills' (no such tag).
+→ List the published versions on the origin, or omit '--pin' to vendor the origin-branch tip.
 ```
 
 ```
@@ -174,13 +208,15 @@ Errors are also a signal about how agents *want* to use the CLI. The concept of 
 Human output is designed for quick scanning — truncated previews, counts instead of nested data, footer hints for next steps.
 
 ```
-$ skillrig search --tag terraform
+$ skillrig search terraform --topic aws
 terraform-plan-review | v1.4.0 | my-org | Review a terraform plan for risk and drift. | requires: oxid, terraform
 terraform-cost        | v0.9.0 | my-org | Estimate the cost delta of a plan.          | requires: terraform
 
-2 skill(s) match tag 'terraform'
-→ Use 'skillrig add <skill>' to vendor one, or 'skillrig search <name> --json' for the full manifest
+2 skill(s) match 'terraform' (topic: aws)
+→ Use 'skillrig add <skill>' to vendor one, or 'skillrig search <name> --json' for the full catalog entry
 ```
+
+`search` is **query-first**: `search [QUERY...]` is a case-insensitive token-AND substring match over `name` + `description` + `topics`, with `--topic` as a separate exact-string filter (repeatable). The result order is deterministic (N6) — a fixed relevance bucket (exact-name > name > topic > description match) then lexicographic by name. There is **no** fuzzy / semantic / TF-IDF ranking. An empty result is a **clean exit 0** (not an error) with a footer hint.
 
 **Truncation rules** (human output only):
 - Description: first 80 chars, append `...` if truncated
@@ -191,12 +227,12 @@ terraform-cost        | v0.9.0 | my-org | Estimate the cost delta of a plan.    
 
 ### JSON Output (`--json`): Complete and Pipeable
 
-JSON output includes full, untruncated data — the entire `skill.toml` manifest, full `requires` constraints, full lock entries. The consumer (agent or `jq` pipe) decides what to extract. No truncation, no previews.
+JSON output includes full, untruncated data — the complete catalog entry (`name`, `version`, `namespace`, `description`, `topics[]`, `path`, and any `requires` summary), full lock entries, full `SKILL.md` frontmatter. The consumer (agent or `jq` pipe) decides what to extract. No truncation, no previews.
 
 ```bash
-# Agent workflow: scan the index, then selectively drill down into one manifest
-skillrig search --tag terraform --json | jq '.[].name'                 # scan names
-skillrig search terraform-plan-review --json | jq '.requires'          # drill into prereqs
+# Agent workflow: scan the index, then selectively drill down into one entry
+skillrig search terraform --topic aws --json | jq '.[].name'           # scan names
+skillrig search terraform-plan-review --json | jq '.[0].requires'      # drill into prereqs
 ```
 
 **Rule**: JSON output is the "execution layer" — complete, structured, pipeable. Human output is the "presentation layer" — budget-conscious, hinted. Token efficiency is achieved by the *workflow pattern* (search → inspect), not by truncating JSON.
@@ -233,6 +269,13 @@ A small set of flags carry the same meaning across every command, so an agent ca
 
 `--force` and the verify-time label-honesty check are two sides of one rule: divergent content is never written or accepted silently. `--force` is the *human's* deliberate override at write time; `verify` is the *gate's* refusal at check time.
 
+A few command-specific flags carry consistent meaning where they apply:
+
+| Flag | Applies to | Meaning |
+|------|-----------|---------|
+| `--pin <ref>` | `add` | Vendor a specific **immutable** version of the skill rather than the origin-branch tip. A bare `^v?SEMVER$` value expands via the origin's `tag_scheme` (e.g. `v1.4.0` → `terraform-plan-review-v1.4.0`); any other value is treated as a literal git ref/SHA. The lock records the resolved `commit` + `treeSha` + the resolved human-readable `version`/tag, so re-acquisition is byte-identical and humans can still reason about versions. A pin that resolves to no ref is a distinct `NoSuchVersionError`, **not** "not found". See [Pin vs. branch ref](#origin-reference-grammar). |
+| `--topic <T>` | `search` | Repeatable exact-string filter applied **after** the free-text `[QUERY...]` match — narrows results to catalog entries carrying topic `<T>`. It is `--topic` (not `--filter`/`--tag`): the catalog field is `topics[]`, renamed from `tags` to avoid colliding with git-tag/version-pin terminology. |
+
 ---
 
 ## Origin Reference Grammar
@@ -246,7 +289,16 @@ skillrig init --origin my-org/my-skills@staging    # track the 'staging' branch
 
 This realizes the `@ref` half of the ecosystem-standard identity grammar `OWNER/REPO[/path]@ref` (architecture R26) that `gh skill` (`gh skill install github/awesome-copilot documentation-writer@v1.2.0`) and Vercel `npx skills` use. The `[/path]` portion remains future work.
 
-**Two meanings of `@ref`, kept distinct.** For an **origin**, `@REF` is a *moving pointer* — a branch you track and re-resolve. For a **skill** vendored via `add` (`skillrig add <skill> --pin <ref>`, **planned** — not in the current slice), the ref is an *immutable* pin — a tag or commit SHA, recorded in the lock so the vendored content is reproducible. Same grammar, opposite intent: the origin says "where to look (and which line of development)"; the pin says "exactly which reviewed bytes." Docs and help text must not conflate them.
+**Two meanings of `@ref`, kept distinct.** For an **origin**, `@REF` is a *moving pointer* — a branch you track and re-resolve. For a **skill** vendored via `add` (`skillrig add <skill> --pin <ref>`, **shipped** with the remote-fetch path), the ref is an *immutable* pin — a tag or commit SHA, recorded in the lock so the vendored content is reproducible. Same grammar, opposite intent: the origin says "where to look (and which line of development)"; the pin says "exactly which reviewed bytes." Docs and help text must not conflate them.
+
+#### Pin vs. branch ref
+
+`--pin <ref>` resolves in two steps so the common case (a version) is ergonomic and the escape hatch (any git ref) still works:
+
+- A **bare semver** (`^v?SEMVER$`, e.g. `1.4.0` or `v1.4.0`) is expanded through the origin's `tag_scheme` (`name-vSEMVER`) to the per-skill tag — `--pin v1.4.0` on `terraform-plan-review` resolves to the tag `terraform-plan-review-v1.4.0`. The fully-qualified tag is also accepted.
+- **Anything else** is treated as a **literal git ref or commit SHA** and fetched verbatim.
+
+A pin that resolves to no ref is a distinct `NoSuchVersionError` (exit 1) — deliberately *not* the same as `NotFoundError` (origin/skill missing), so the agent sees "that version doesn't exist" rather than "that skill doesn't exist". The lock records the resolved `commit` (provenance) + `treeSha` (label-honesty) + the resolved human-readable `version`/tag. The origin publishes **no per-skill tree-SHA** (the catalog is discovery-only), so label-honesty here means "the on-disk content still matches what was vendored at this commit," anchored by provenance — not "matches an origin-attested hash."
 
 ### Why a single `@ref` string, not a separate flag
 
@@ -262,11 +314,13 @@ Every `skillrig` subcommand MUST identify which pattern(s) it follows. This clas
 
 | Pattern | Purpose | Examples | Constraints |
 |---------|---------|----------|-------------|
-| **Query** | Deterministic read of the discovery artifact | `search` | Offline. Reads committed `index.json`. Deterministic tag filtering — **no inference** (N6). |
-| **Vendor Mutation** | Write skill tree + lock entry | `add` *(implemented)*, `bump --pr` | Writes lock via `skillcore` only. Supports `--dry-run`; refuses to clobber content that diverges from the locked `treeSha` without `--force`. `bump` *proposes* (opens a PR), never force-adopts (R13). MUST never silently discard local edits (R32). Vendors byte-identical + mode-preserving; the skill name MUST be a single path segment (no traversal). **Symlinks in a skill subtree are rejected this slice** — following them would break byte-identical / git-canonical vendoring (git records a symlink as a link, not its target); preserving symlinks faithfully is a future relaxation. |
-| **Verification Gate** | Offline integrity / prereq / conformance | `verify` *(implemented — integrity-only)*, `lint` | MUST be offline + deterministic. Exit-code driven. **No live/online signal in this path** (R11/N1). `verify` = consumer CI gate; `lint` = author CI gate on the origin. As implemented, `verify` is **integrity-only** (label-honesty + orphan detection, exit 2); prerequisite/eligibility checks (a missing `[[requires]]` tool → exit 3) belong to the future `doctor`, so `verify` does not emit exit 3 today. |
+| **Query** | Deterministic read of the discovery artifact | `search` *(implemented)* | Reads the origin's `index.json` (fetched per call — no offline cache this slice; an unreachable origin is the `UnreachableError`). Query-first: deterministic token-AND substring over `name`+`description`+`topics` + exact `--topic` filter; fixed relevance-bucket then lexicographic order — **no inference / no fuzzy ranking** (N6). Empty result = clean exit 0. Gates the origin's `skillrigConvention` before reading. |
+| **Vendor Mutation** | Write skill tree + lock entry | `add` *(implemented — local + remote)*, `bump --pr` | Writes lock via `skillcore` only. Serves a **local-path** origin (read a checkout) and a **remote** `OWNER/REPO` origin (fetch the subtree over `git`, token via `os.exec` of `gh`/`git`, never a write credential) — the two origin forms are classified, never "both-present". `--pin` vendors an immutable version. Supports `--dry-run`; refuses to clobber content that diverges from the locked `treeSha` without `--force`. `bump` *proposes* (opens a PR), never force-adopts (R13). MUST never silently discard local edits (R32). Vendors byte-identical + mode-preserving; the skill name MUST be a single path segment (no traversal); **path-traversal + symlink guards apply to remotely-fetched content too**. **Symlinks in a skill subtree are rejected this slice** — following them would break byte-identical / git-canonical vendoring (git records a symlink as a link, not its target); preserving symlinks faithfully is a future relaxation. |
+| **Verification Gate** | Offline integrity / prereq / conformance | `verify` *(implemented — integrity-only)*, `lint` | MUST be offline + deterministic. Exit-code driven. **No live/online signal in this path** (R11/N1). `verify` = consumer CI gate; `lint` = author CI gate on the origin. As implemented, `verify` is **integrity-only** (label-honesty + orphan detection, exit 2); prerequisite/eligibility checks (a missing `requires` tool → exit 3) belong to the future `doctor`, so `verify` does not emit exit 3 today. |
 | **Environment** | Health, auth, config, bootstrap | `doctor`, `init` | MUST be idempotent. `doctor` checks prerequisite auth (R18); works without a fully-configured project. `init` is **consumer-side only** — binds to an *existing* origin, never bootstraps one (architecture §2d). |
 | **Global Management** | Fetch/restore user-scope skills | `global add`, `global verify` | Genuinely *fetches and materializes* (the restore mode project scope doesn't need, §3). Touches per-environment home dirs, never the repo's project lock (R8). |
+
+> **Origin-side generator — `index` (not a consumer pattern).** `skillrig index` is the only command that runs **inside the origin repo** (in its `index.yml` CI on merge to `main`), not against a consumer's vendored tree. It walks `skills/*/SKILL.md`, parses each via the **same** `skillcore.ParseManifest` the consumer commands use (AP-04), and emits/marshals `index.json` — the catalog `search` consumes. It is **not** one of the five consumer patterns above: it produces the discovery artifact rather than reading or vendoring it. It is still consume-only in the credential sense — no auth, local-filesystem only — so it does not breach AP-05. Constraints: deterministic full-regenerate output (no append/aggregation/GC — single-tip catalog); the producer's output MUST equal the committed `index.json` (a ground-truth contract test); and it MUST **fail clearly** (exit 1) on a skill missing its required `x-skillrig.version` rather than silently under-emitting. Exit codes `0`/`1` only.
 
 ### Failure Mode Constraints
 
@@ -274,7 +328,7 @@ Each pattern has a distinct failure mode expectation:
 
 | Pattern | Failure Mode |
 |---------|-------------|
-| **Query** | MUST fail with clear error + suggested fix (e.g. no origin → run `init`). |
+| **Query** | MUST fail with clear error + suggested fix (no origin → run `init`; unreachable/auth/incompatible-convention fetching the catalog → the matching typed error). An **empty match set is success (exit 0)**, not a failure — it prints a footer hint, not an error. |
 | **Vendor Mutation** | MUST validate origin + auth before fetching. Three-way-merge conflict → non-zero exit, write git-style conflict markers, instruct resolve-and-rerun (architecture §5b). Never discard local edits. |
 | **Verification Gate** | MUST be deterministic pass/fail by exit code. Label-honesty mismatch = fail (exit 2); orphan = fail (exit 2); unresolved conflict markers = fail. Prereq miss (exit 3) is reserved for the future `doctor` — the implemented `verify` is integrity-only and does not emit it. |
 | **Environment** | MUST be idempotent and safe to retry. MUST distinguish "tool missing" from "tool exists but unauthenticated" (R18). |
@@ -284,9 +338,9 @@ Each pattern has a distinct failure mode expectation:
 
 The product promise — "the skill your agent runs is exactly the version that was reviewed and approved" — rides on `verify` being **offline and deterministic** (architecture §2c, R11). Honor the split:
 
-- **Offline always** (`search`, `verify`, `lint`): operate on committed `index.json` / `skills-lock.json` and the git tree already on disk. The project tree is in git, so there is no "restore from lock" — `verify` only *checks* (§3). Fully offline.
-- **Network when fetching** (`add`, `bump --pr`, `global add`): reach the origin / git to vendor or restore content. MUST fail with a clear error when the origin is unreachable.
-- **Auth-aware** (`doctor`): explicitly probes `gh auth` / `GITHUB_TOKEN` reachability for private backing-CLI sources and reports auth as its own actionable failure (R18).
+- **Offline always** (`verify`, `lint`, `index`): operate on committed `skills-lock.json` + the git tree on disk (`verify`/`lint`) or the origin's local `skills/` tree (`index`). The project tree is in git, so there is no "restore from lock" — `verify` only *checks* (§3). Fully offline; `index` shells `git` only to compute tree-SHAs of a local tree, never the network.
+- **Network when fetching** (`add`, `search`, `bump --pr`, `global add`): reach the origin / git to vendor content or read the catalog. `search` fetches the origin's `index.json` **per call** (no offline cache this slice — a deliberate freshness choice, D-catalog-fetch); `add` fetches the skill subtree. MUST fail with the matching typed error (`UnreachableError` / `AuthError` / `NotFoundError`) when the origin can't be reached. *(A **local-path** origin makes `add`/`search` operate on a checkout with no network — the origin-form classification, not a cache.)*
+- **Auth-aware** (`add`, `search`, `doctor`): resolve a read token via `os.exec` (`GH_TOKEN` env > `GITHUB_TOKEN` env > `gh auth token --hostname <host>`), inject it into the fetch via `git -c http.extraHeader` (never in the URL), and surface auth as its own actionable failure distinct from unreachable/not-found (R18). The token is a **read-only fetch** credential — there is still no write credential in the binary (AP-05).
 
 ---
 
@@ -328,7 +382,7 @@ return fmt.Errorf("add failed: you must run 'gh auth login'")
 return fmt.Errorf("add failed: %s\n→ Check the origin: 'cat .skillrig/config.toml'\n→ If the repo is private, see 'gh auth status' / GITHUB_TOKEN", stderr)
 ```
 
-### AP-04: A parallel tree-SHA / manifest-parse implementation
+### AP-04: A parallel tree-SHA / manifest-parse / fetch / catalog implementation
 ```go
 // Wrong: bump computes the tree SHA one way, verify recomputes it another way.
 //        They drift, and the value CI writes during bump no longer matches what
@@ -341,6 +395,7 @@ sha := someOtherHash(dir)              // in verify
 //        hard boundary (architecture §2: "the two interfaces cannot diverge").
 sha := skillcore.TreeSHA(dir)
 ```
+The same single-implementation rule extends to every shared primitive 003 adds: **one** remote-fetch impl, **one** `ParseManifest` (the `SKILL.md` frontmatter reader), **one** catalog parse/generate (`search` reads what `index` writes), and **one** search matcher — all in `pkg/skillcore`. `index` generating a catalog `search` can't parse, or `add` fetching a way `verify` can't reproduce, is the same drift this anti-pattern forbids.
 
 ### AP-05: Baking the origin into the binary, or adding a write credential
 ```
@@ -379,11 +434,11 @@ Inside the CLI, there are two conceptual layers:
 │  Truncation | Footer hints | stderr/stdout  │
 ├─────────────────────────────────────────────┤
 │  Execution: Go business logic               │  ← Cobra routing; skillcore (tree SHA,
-│  skillcore | index compare | lock I/O       │     manifest parse); index/ compare; lock R/W
-└─────────────────────────────────────────────┘
+│  skillcore | fetch | catalog | lock I/O     │     frontmatter parse, fetch, catalog, search);
+└─────────────────────────────────────────────┘                                lock R/W
 ```
 
-The execution layer handles command routing, the shared `skillcore` primitives (tree-SHA computation, `skill.toml` / lock parsing), index comparison for `bump`, and lock I/O. The presentation layer formats output for the consumer (human or agent). The presentation/execution split itself is a design concern within each command's `runXxx()` function — but the integrity primitives are **not** inline: `skillcore` is a separate, importable **public package** (`pkg/skillcore`, per SDK-1), so third-party Go tools can build their own `add`/`verify` on the same primitives the CLI uses.
+The execution layer handles command routing, the shared `skillcore` primitives (tree-SHA computation, `SKILL.md` frontmatter / lock parsing, remote fetch, catalog parse/generate, the search matcher), index comparison for `bump`, and lock I/O. The presentation layer formats output for the consumer (human or agent). The presentation/execution split itself is a design concern within each command's `runXxx()` function — but the integrity primitives are **not** inline: `skillcore` is a separate, importable **public package** (`pkg/skillcore`, per SDK-1), so third-party Go tools can build their own `add`/`verify` on the same primitives the CLI uses.
 
 **Key rule**: Execution logic must not depend on output format. The same data path serves both `--json` and human output. And per AP-04, there is exactly one `skillcore` implementation of the integrity primitives — the public `pkg/skillcore` package — that `add` and `verify` (and future `bump`/`doctor`) all dispatch to, so the gate can never diverge from what CI wrote. If an MCP surface for agents is ever added, it dispatches to `pkg/skillcore` too — never a parallel implementation (architecture §2).
 

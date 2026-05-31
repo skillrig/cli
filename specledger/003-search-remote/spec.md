@@ -1,0 +1,234 @@
+# Feature Specification: Discover & Acquire Skills (`search` + remote `add`)
+
+**Feature Branch**: `003-search-remote`
+**Created**: 2026-05-30
+**Status**: Draft
+**Input**: User description: "Combine roadmap 003 (search) and 004 (remote add) into one MVP slice: a user who has bound their repo to an origin can FIND a skill in the org's library and VENDOR it straight from the remote library — with no pre-existing local copy of the library."
+
+> **Technical companion**: [spec-tech.md](./spec-tech.md) holds every implementation-level decision (origin classification, fetch mechanism, catalog handling, authentication sources, fingerprint semantics, the new network test tier) and the **seven open decisions deferred to `/specledger.clarify`**. This spec stays user-facing; the companion is the input to `/specledger.plan`. Where this spec says "the library catalog" or "records the skill's exact identity," the companion names the concrete artifacts.
+
+## Overview
+
+The first two slices made a repo *self-describing about where its skills come from* (001) and made the skills it already carries *honest* (002 — `add` from a **local copy** of the library, plus `verify`). But to vendor a skill today, a user must already have the entire library checked out next to their repo. That is a developer-only workaround, not something an organization can adopt.
+
+This slice closes that gap with the smallest coherent "discover & acquire" loop:
+
+1. A user **finds** the skill they want by browsing or filtering their org's library (`search`).
+2. A user **vendors** that skill directly **from the remote library** — no manual checkout, no copy step — and the tool records its exact identity so it can be verified later (`add`, extended to fetch remotely).
+
+After this slice, the everyday path is: `skillrig init` → `skillrig search` → `skillrig add <skill>` → `skillrig verify`. That is the first end-to-end experience a real consumer can adopt.
+
+Remote acquisition is **additive**: vendoring from a local copy of the library (shipped in 002) keeps working unchanged, as a development, offline, and air-gapped path.
+
+## Clarifications
+
+The specify phase left seven decisions open. The clarify session below resolved them into **two firm decisions** and **four research spikes** (skill-manifest format, catalog generation/lifecycle, authentication, remote-git testing). **All four spikes are now complete** (writeups in [spec-tech.md](./spec-tech.md) §8b + `research/2026-05-31-*.md`); their outcomes are folded in and the assumptions below stand as revised.
+
+> **Readiness:** spikes complete — this feature is **plan-ready** (`/specledger.plan`). Two outcomes expand scope and must carry into planning: (a) **skills migrate to a single `SKILL.md` with standard frontmatter** (the separate manifest file is dropped) — landed as the first step of the work; (b) the tool **also generates the library catalog** (`skillrig index`), because discovery is meaningless against a hand-maintained catalog that drifts. See [Assumptions](#assumptions) A7–A8.
+
+### Session 2026-05-31
+
+- Q: How should 003 treat the skill manifest format (`skill.toml` vs the agentskills.io frontmatter + `metadata` standard the catalog is built from)? → A: **Spike before deciding** — compare `skill.toml` vs agentskills.io frontmatter + `metadata` namespacing (e.g. `skillrig.dev/requires`), toml/yaml fragility, and how the Go `gh` CLI parses frontmatter; lock the catalog field-source only after. (Spike S1)
+- Q: Who generates and maintains the catalog `search` reads, and is that in 003's scope? → A: **Spike the catalog lifecycle first** — generation, cross-ref tag aggregation across origin refs, append-only vs full regenerate, and garbage-collection — because it strongly shapes how indexing works; scope the generation work after. (Spike S2)
+- Q: Does the tool ever create/cache a local copy of a *remote* origin? → A: **No.** Acquisition fetches from the GitHub `OWNER/REPO`. A "local origin" exists **only** when the user configures a local filesystem path via `init` (and as a test fixture); there is no tool-managed cache and no "prefer local copy when both present" rule. (Confirmed against the 002 code: 002 overloaded `OWNER/REPO` as a directory `<consumerRepoRoot>/OWNER/REPO` and ran `git` directly on that working tree — it never used `file://` or a remote. 003 splits the two forms: an explicit local path vs a remote `OWNER/REPO`.) This supersedes assumption A1 and aligns with fetch-catalog-per-search.
+- Q: How is authentication to a private origin handled this slice? → A: **Spike mise's token-resolution path** (mise is open-source Rust — clone to a temp dir to study it) and the already-checked-out Go `gh` CLI source (`/Users/vincentdesmet/specledger/skillrig/gh-cli`); use `os.exec` of `gh`/`git` for the token, **not** `gh`-as-a-library (too heavy); defer GitHub Enterprise hosting to the roadmap/backlog. (Spike S3)
+- Q: When a skill is acquired at a pin (tag/ref), what is recorded in the lock? → A: **commit + treeSha + the resolved human-readable version/tag** — provenance (commit) and label-honesty (treeSha) for the machine, plus the version/tag (even if later rewritten upstream) so humans can reason about older/newer.
+- Q: How are the network-failure FRs (auth / unreachable / transient) tested, given 002 used a local git working tree with no `file://` and no remote? → A: **Spike remote-git testing** — `file://` (or a local bare repo) for the happy/integrity fetch path, plus `httptest` or a fault-injection seam for the network-error FRs that `file://` cannot reproduce; decide the seam before planning. (Spike S4)
+- Q: S1 concluded the frontmatter migration adds a YAML-parsing dependency (`gopkg.in/yaml.v3`), contradicting the "no new dependencies" note — accept it? → A: **Accepted** — align with the agentskills.io standard; `gopkg.in/yaml.v3` is adopted (the same parser `gh` uses), recorded as a deliberate divergence in the FR-024 architecture update.
+- Q: Is `search` only a topic filter, and does "tag" collide with git tags? → A: **Resolved by Spike S5** (`research/2026-05-31-search-index-architecture.md`). **`search [QUERY]` is query-first** — the positional argument is a free-text **query matched against name + description (+ topics)**, deterministic token-AND substring, ordered by a fixed relevance score then `name` (no fuzzy/semantic — N6). The label concept is **renamed "topic"** (`--topic` flag, `topics[]`, `metadata.x-skillrig.topics`) — the agentskills.io spec defines no tags/topics field, so nothing upstream breaks, and it removes the collision with **git tags** (version pins, `name-vSEMVER`). The flag is **`--topic`** (not a generic `--filter` — YAGNI, one dimension). **A flat `index.json` + in-memory filter is sufficient** (catalog is tens–hundreds of entries; an index structure earns its keep only at ~10k+ docs in a long-lived process) — **stdlib-only**, no search dependency.
+
+## User Scenarios & Testing *(mandatory)*
+
+### User Story 1 - Discover a skill in the org library (Priority: P1)
+
+A developer (or their agent) has bound the repo to an origin but does not know the exact name of the skill they want. They type a **free-text query** (e.g. `skillrig search terraform plan`) that is matched against each skill's name and description, optionally narrowing further by topic, and get back a short, scannable answer they can act on — including the exact name to feed to `add`.
+
+**Why this priority**: You cannot vendor what you cannot find. Discovery is the entry point of the loop and the lowest-risk half of the slice; on its own it already delivers value (an agent can enumerate available skills before deciding). It is independently demonstrable without any change to how skills are vendored.
+
+**Independent Test**: Bind a repo to a library that publishes a catalog of skills; run the search command with and without a topic filter; confirm the matching skills are listed (human-readable and machine-readable), that filtering is exact and repeatable, and that an empty result is reported as a clean "nothing matched" rather than an error.
+
+**Acceptance Scenarios**:
+
+1. **Given** a repo bound to a library that publishes two or more skills, **When** the user runs `skillrig search`, **Then** the tool lists every published skill with enough detail (name, version, one-line description) to choose one, plus a footer hint pointing to the next step.
+2. **Given** the same repo, **When** the user runs `skillrig search` filtered to a topic that only some skills carry, **Then** only the skills carrying that topic are listed, and the result is identical on repeated runs.
+3. **Given** the same repo, **When** the user filters to a topic no skill carries, **Then** the tool reports "no skills matched" and succeeds (it is not an error to find nothing).
+4. **Given** any search, **When** the user requests machine-readable output, **Then** the output is complete (no truncation) and contains every field a downstream agent needs to call `add`.
+
+---
+
+### User Story 2 - Vendor a skill directly from the remote library (Priority: P1)
+
+A developer (or their agent) has found the skill they want and vendors it with a single command. They do **not** first clone or copy the library anywhere — the tool fetches the skill's content from the remote library on their behalf, places it in the repo, and records its exact identity so the same content can be proven later.
+
+**Why this priority**: This is the keystone that turns skillrig from a local-path tool into one an organization can adopt. It completes the discover→acquire→verify loop and unblocks every later capability (upgrades, multi-client placement).
+
+**Independent Test**: From a repo bound to a remote library, with **no** local copy of that library present, run the add command for a published skill; confirm the skill's files appear in the repo identical to the library's, that an identity record is written, and that the existing `verify` command then passes against what was vendored.
+
+**Acceptance Scenarios**:
+
+1. **Given** a repo bound to a remote library and **no** local copy of it, **When** the user runs `skillrig add <skill>` for a published skill, **Then** the skill's content is placed in the repo exactly as the library holds it and an identity record (which version, where it came from, and a fingerprint of the content) is written.
+2. **Given** a freshly vendored skill, **When** the user runs `skillrig verify`, **Then** verification passes — the recorded identity and the on-disk content agree.
+3. **Given** a skill already vendored at the same version and content, **When** the user runs `skillrig add <skill>` again, **Then** the tool reports "already up to date" and changes nothing (a safe, repeatable no-op).
+4. **Given** a skill already vendored but locally modified, **When** the user runs `skillrig add <skill>` again, **Then** the tool refuses to silently overwrite and tells the user how to force it — matching the behavior vendoring from a local copy already has.
+5. **Given** a request for a skill the library does not publish, **When** the user runs `skillrig add <skill>`, **Then** the tool reports the skill was not found in the library and suggests how to discover the correct name.
+
+---
+
+### User Story 3 - Acquire a pinned, reproducible version (Priority: P2)
+
+A developer wants the acquisition to be reproducible: not "whatever the library's current tip happens to be," but an exact, immutable version. They pin the skill to a specific released version when vendoring, and that exact identity is recorded so a later acquisition (on another machine, in CI, months later) reproduces the same content byte-for-byte.
+
+**Why this priority**: Reproducibility is core to the product promise ("exactly the version that was reviewed and approved"), but the default path (US2) already records a verifiable fingerprint, so explicit pinning is a strengthening rather than a prerequisite. It can ship immediately after US2 or split out if it risks the MVP.
+
+**Independent Test**: Vendor a skill pinned to a specific released version; record the result; on a clean repo, vendor the same skill pinned to the same version; confirm the two results are byte-identical and carry the same recorded identity.
+
+**Acceptance Scenarios**:
+
+1. **Given** a library that has published more than one released version of a skill, **When** the user vendors it pinned to a specific version, **Then** that exact version's content is placed and its immutable identity is recorded.
+2. **Given** a skill vendored at a pinned version, **When** another user vendors the same skill at the same pin on a clean repo, **Then** both repos hold byte-identical content with the same recorded identity.
+
+---
+
+### User Story 4 - Trustworthy, navigable failures (Priority: P2)
+
+When acquisition or discovery cannot proceed, the developer (or their agent) gets an error that says what failed, the real reason, and what to do next — never a misleading or generic message. In particular, three confusable situations are kept distinct: (a) the tool is too old (or too new) for the library's format; (b) the user lacks permission to reach a private library; (c) the library cannot be reached at all.
+
+**Why this priority**: Errors-as-navigation is a binding principle of this CLI, and the auth-vs-not-found confusion is the single most common onboarding and CI footgun. Getting these distinct is what makes the remote path safe to hand to an agent. It is P2 only because the happy path (US1/US2) must exist first to fail against.
+
+**Independent Test**: Drive each failure independently — point the tool at a library whose format it does not support; attempt to reach a private library without credentials; attempt to reach an unreachable library — and confirm each produces a *distinct*, actionable message, and that a verbose mode reveals the underlying cause.
+
+**Acceptance Scenarios**:
+
+1. **Given** a library whose published format is newer (or otherwise incompatible) than this tool understands, **When** the user runs `search` or `add`, **Then** the tool fails clearly stating a compatibility mismatch and what to do (e.g. update the tool), rather than misbehaving or producing partial results.
+2. **Given** a private library the user is not authenticated to, **When** the user runs `search` or `add`, **Then** the tool reports an **authentication** problem distinctly from "skill not found" or "library not found," and points at how to authenticate.
+3. **Given** a library that cannot be reached (offline, wrong location), **When** the user runs `search` or `add`, **Then** the tool reports the library could not be reached and suggests the likely fixes, distinct from an authentication or compatibility failure.
+4. **Given** any of the above, **When** the user re-runs with verbose output, **Then** the underlying raw cause is shown without being swallowed.
+
+---
+
+### User Story 5 - Keep the library's catalog honest (origin maintainer) (Priority: P2)
+
+A library maintainer (or the library's CI) regenerates the published catalog directly from the skills in the library, so that what `search` shows is always an accurate, up-to-date reflection of what the library actually contains — never a hand-maintained list that silently drifts out of sync.
+
+**Why this priority**: `search` is only as trustworthy as the catalog it reads. A catalog maintained by hand (or by a fragile script that omits fields like topics) will drift from the real skills, making discovery lie. Because skillrig is the single tool for *both* consuming *and* maintaining a library, the same binary that reads the catalog must be able to produce it from one source of truth — closing the loop and guaranteeing the producer and consumer agree by construction. P2 because consumers can be demonstrated against a correct fixture catalog first, but it must ship in this slice or `search` rests on a known-drifting producer.
+
+**Independent Test**: In a library, run the catalog-generation command; confirm the produced catalog exactly matches what the skills on disk declare (every skill, every advertised field including topics), and that re-running it on unchanged skills produces an identical catalog (deterministic). Confirm a stale, hand-edited catalog is corrected to match the skills.
+
+**Acceptance Scenarios**:
+
+1. **Given** a library whose skills declare names, versions, descriptions, and topics, **When** the maintainer regenerates the catalog, **Then** the catalog lists exactly those skills with exactly those fields — including the topics `search --topic` filters on.
+2. **Given** an unchanged set of skills, **When** the catalog is regenerated twice, **Then** the two catalogs are identical (deterministic, no spurious churn).
+3. **Given** a catalog that has drifted from the skills on disk, **When** the maintainer regenerates it, **Then** the catalog is brought back into exact agreement with the skills.
+
+---
+
+### Edge Cases
+
+- **Library with an empty catalog**: `search` reports "no skills published" and succeeds; `add` of any name reports "not found."
+- **Origin is a local path vs a remote `OWNER/REPO`**: these are two distinct configured forms, not a precedence to resolve — the tool uses whichever the origin was configured as and reports which form it used. It never silently maintains a local copy of a remote (A1).
+- **Skill listed in the catalog but its content is missing/incomplete in the library**: treated as a library-side problem and reported as such (distinct from "not found" and from "auth"), not as a silent partial vendor.
+- **Topic filter matches the catalog but the chosen skill is later not fetchable** (US1 found it, US2 cannot get it): the discovery success and the acquisition failure are reported independently and honestly.
+- **Catalog and the actual published skills disagree** (a skill is listed but the library has moved on, or vice-versa): the tool does not invent results; it reports what it can verify and surfaces the discrepancy.
+- **Pin names a version that does not exist**: reported as an actionable "no such version," distinct from "skill not found."
+
+## Requirements *(mandatory)*
+
+### Functional Requirements
+
+**Discovery (`search`)**
+
+- **FR-001**: Users MUST be able to list the skills their bound library publishes, via a `search` command, without first obtaining a local copy of the library.
+- **FR-002**: Users MUST be able to supply a free-text **query** (positional) that is matched against each skill's name and description (and topics); a skill matches when **every** query term appears. Matching MUST be deterministic and repeatable with **no** semantic, fuzzy, or learned-relevance inference (N6). When results are presented in an order, that order MUST be a deterministic function of the query and the catalog (a fixed relevance grouping, then alphabetical by name) — never a non-reproducible ranking.
+- **FR-002a**: Users MUST also be able to narrow by one or more **topics** — a structured, exact-string filter distinct from the free-text query — where a skill matches only if it carries all requested topics. ("Topic" is the deliberate name for these labels; they are **not** git tags, which skillrig reserves for version pins.)
+- **FR-003**: `search` MUST present results in two levels: a compact, scannable human listing with a footer hint toward the next step, and a complete machine-readable form that includes every field needed to subsequently vendor a listed skill.
+- **FR-004**: Finding no matches MUST be a successful outcome that clearly says nothing matched — never an error.
+- **FR-005**: Each listed skill MUST include at least its exact name (as accepted by `add`), its version, and a one-line description.
+
+**Remote acquisition (`add`)**
+
+- **FR-006**: Users MUST be able to vendor a published skill directly from the **remote** library with a single `add` command, with **no** pre-existing local copy of the library required.
+- **FR-007**: Vendoring MUST place the skill's content in the repo identical to what the library holds for the acquired version.
+- **FR-008**: Vendoring MUST record the skill's exact identity — its provenance (the exact source point it came from), a content fingerprint, **and** the human-readable version/tag it resolved to — such that the existing `verify` command can later confirm the on-disk content matches what was recorded, and a human can reason about which version they have (older/newer) without decoding the provenance.
+- **FR-009**: Re-vendoring a skill that is already present at the same version and content MUST be a safe no-op that reports "already up to date" and changes nothing.
+- **FR-010**: Re-vendoring a skill whose local content has diverged MUST refuse to silently overwrite, and MUST tell the user how to force the overwrite — consistent with the behavior when vendoring from a local copy.
+- **FR-011**: Vendoring from a **local-path library** MUST continue to work unchanged (remote acquisition is additive, not a replacement). A "local library" exists **only** when the user has explicitly configured a local filesystem path as the origin; the tool MUST NOT create or maintain a local copy of a *remote* library on the user's behalf, and there is therefore no "both present" precedence to resolve — the origin is either an explicit local path or a remote `OWNER/REPO`, and the tool reports which form it used.
+- **FR-012**: Requesting a skill the library does not publish MUST report "not found in the library" with guidance to discover the correct name (e.g. run `search`), and MUST be distinct from reaching/auth failures.
+
+**Reproducible pinning (`add`)**
+
+- **FR-013**: Users MUST be able to vendor a skill pinned to a specific released version, and that exact identity MUST be recorded — including both the immutable provenance the pin resolved to and the human-readable version/tag of the pin itself (per FR-008).
+- **FR-014**: Vendoring the same skill at the same pin on a clean repo MUST reproduce byte-identical content with the same recorded identity.
+- **FR-015**: Pinning to a version that does not exist MUST be reported as an actionable "no such version," distinct from "skill not found."
+
+**Trust & failure modes (both commands)**
+
+- **FR-016**: When the library's published format is incompatible with this tool, both `search` and `add` MUST fail clearly with a compatibility-mismatch message and a suggested remedy, rather than misbehaving or producing partial results.
+- **FR-017**: When the library is private and the user is not authenticated, both commands MUST report an **authentication** failure that is distinct from "not found" and from "unreachable," and MUST point at how to authenticate.
+- **FR-018**: When the library cannot be reached, both commands MUST report an unreachable-library failure distinct from authentication and compatibility failures.
+- **FR-019**: Every error MUST state what failed, the real (never-swallowed) cause, and a suggested fix, with a verbose mode that reveals the underlying raw cause (errors-as-navigation).
+- **FR-020**: Both commands MUST expose the project's standard output and diagnostic options (machine-readable output; verbose); `add` MUST additionally support a dry-run preview and a force override, consistent with the existing vendoring command.
+
+**Exit behavior**
+
+- **FR-021**: `search` MUST exit success on any well-formed query (including an empty result) and signal a usage/configuration problem with the standard usage/config exit status; it does not produce verification or prerequisite failures.
+- **FR-022**: `add` MUST exit success on a completed vendor *and* on an idempotent no-op, and signal a usage/configuration problem (including not-found, auth, unreachable, and incompatibility, which are configuration/usage-class for this slice) with the standard usage/config exit status. Verification-failure and prerequisite-failure exit statuses remain out of scope for this slice.
+
+**Library catalog generation (origin-side)**
+
+- **FR-025**: The tool MUST be able to generate the library's published catalog from the skills in the library, so the catalog is a faithful, current reflection of those skills (US5). The generated catalog MUST carry every field `search` consumes — including the topics used for filtering.
+- **FR-026**: Catalog generation MUST be deterministic: regenerating it from an unchanged set of skills MUST produce an identical catalog (no spurious changes).
+- **FR-027**: The catalog MUST reflect the skills as they currently exist in the library (the current state), one entry per skill; it is **not** a version-history index. Earlier versions of a skill are reached by acquiring a specific pin (US3), not by browsing the catalog.
+- **FR-028**: The generated catalog and the skills it is generated from MUST be derived from the **same** definition the tool reads when vendoring and verifying — so the producer (catalog) and the consumers (`search`, `add`, `verify`) cannot disagree about what a skill declares.
+
+**Co-evolution deliverables (process requirements for this branch)**
+
+- **FR-023**: The PoC origin template repository (the real library this feature is designed against) MUST be updated so its published catalog is produced by the tool's own generation (FR-025) rather than the hand-maintained helper that currently drifts (it omits topics), and so each skill is defined by a single `SKILL.md` (its separate sidecar manifest file is folded in — see Assumption A7). The reconciliation MUST be recorded.
+- **FR-024**: The project roadmap and architecture documents MUST be updated to record the divergences this branch introduces: (a) discovery + remote acquisition + catalog generation ship as **one** combined slice; (b) the earlier local-copy seam is reframed (explicit local path vs remote `OWNER/REPO`, no tool-managed cache); (c) the skill definition moves to a single `SKILL.md`/frontmatter (A7), which entails a standard-frontmatter parsing dependency that must be reconciled against the "no new dependencies" note; (d) factual corrections surfaced by the spikes — the catalog is generated on merge to the default branch (not "on release"), and the documented private-CLI token precedence was inaccurate.
+
+### Key Entities *(include if feature involves data)*
+
+- **Library (origin)**: the org's source-of-truth repository of skills, already resolvable by the tool. It takes one of two forms: a **remote** library identified by `OWNER/REPO` with an optional branch/ref (fetched over the network), or a **local-path** library the user explicitly configured as a filesystem path. The tool never silently converts one into the other.
+- **Library catalog**: the library's published, machine-readable list of available skills — each entry carrying at least name, version, description, and topics — plus the format/compatibility marker the tool checks. The basis for `search`. Discovery-only: it does not itself carry per-skill fingerprints.
+- **Skill**: a named, versioned unit of agent instruction content vendored into the consumer repo.
+- **Topic**: a deterministic label attached to a skill in the catalog (carried in the skill's frontmatter), used to filter discovery. Data only; no inferential matching. Named "topic" (not "tag") to avoid colliding with git tags, which skillrig uses for immutable version pins.
+- **Pin**: an explicit version reference (a tag/release) used at acquisition time to make the result reproducible (distinct from the library's moving branch pointer). The pin resolves to an immutable provenance point, and both the provenance and the human-readable pin are recorded.
+- **Identity record (lock entry)**: the per-skill record written at acquisition time — the resolved version/tag, source/provenance, and content fingerprint — that `verify` later checks. Extends 002's shape with the human-readable version/tag alongside the provenance; this slice can write it from a remote source.
+
+## Assumptions
+
+These are reasonable defaults adopted so the spec is internally consistent. After the 2026-05-31 clarify session, A1 is **settled** (no longer an assumption — see Clarifications) and A4 is **pending Spike S3**; the rest stand unless a spike revises them. Full detail in [spec-tech.md](./spec-tech.md).
+
+- **A1 — Local vs remote source (FR-006, FR-011) — SETTLED 2026-05-31**: the origin is *either* a remote `OWNER/REPO` (fetched) *or* an explicitly-configured local filesystem path; the tool never creates or caches a local copy of a remote, so there is no "both present" precedence. (Supersedes the original "prefer the local copy" wording.)
+- **A2 — Discovery freshness**: `search` reflects the library's current published catalog at run time; if the library cannot be reached, `search` reports an unreachable failure rather than serving a stale result (no offline cache this slice). Confirmed: fetch the catalog per `search` call.
+- **A3 — Query & topic filtering**: the free-text query is case-insensitive token-AND substring over name+description+topics; multiple `--topic` values narrow further (a skill must carry all requested topics; exact-string, case-insensitive). Result order is a fixed relevance grouping (exact-name > name-hit > topic-hit > description-only) then alphabetical by name — deterministic, no learned ranking (N6).
+- **A4 — Authentication — PENDING Spike S3**: the tool reuses the user's existing standard credentials for reaching the library (the same mechanism already required to clone private org repos) via `os.exec` of `gh`/`git`; it introduces no credential of its own and stores nothing. The exact token-resolution path is the subject of Spike S3.
+- **A5 — Reproducibility anchor**: the recorded content fingerprint proves the on-disk content still matches what was vendored from the library at a specific provenance point; it is not an independently library-attested hash (the library does not publish per-skill fingerprints in its catalog).
+- **A6 — Identity/lock shape**: the per-skill identity record extends 002's shape with the resolved human-readable version/tag (D-pin); this slice also lets the content originate remotely.
+- **A7 — Single-file skill definition (from Spike S1) — SCOPE**: each skill is defined by a single `SKILL.md` whose standard frontmatter carries its metadata (with tool-specific fields under a namespaced extension), aligning with the cross-ecosystem skill standard; the separate sidecar manifest file shipped in 002 is folded into that frontmatter as the first step of this work. Rationale, exact field mapping, and migration sizing are in [spec-tech.md](./spec-tech.md) §8b/S1. (Implies adopting a standard frontmatter parser — `gopkg.in/yaml.v3`, **accepted 2026-05-31** to align with the standard, the same parser `gh` uses; recorded as a deliberate divergence from "no new dependencies" in the FR-024 update.)
+- **A8 — Catalog is generated, single-tip (from Spike S2) — SCOPE**: the catalog is produced by the tool from the library's current skills (FR-025) and reflects only the current state at the library's selected branch/ref (FR-027), regenerated wholesale; it does not aggregate history and needs no pruning. Detail in [spec-tech.md](./spec-tech.md) §8b/S2.
+
+## Success Criteria *(mandatory)*
+
+### Measurable Outcomes
+
+- **SC-001**: A new user can go from a freshly bound repo to a vendored, verifying skill using only `search` then `add` — with **no** manual checkout or copy of the library — in a single sitting, demonstrated end-to-end against the real PoC library.
+- **SC-002**: 100% of `search` results are deterministic: identical inputs against an unchanged library produce identical output across repeated runs.
+- **SC-003**: A skill vendored remotely and then checked with `verify` passes 100% of the time when untouched (the recorded identity and on-disk content agree).
+- **SC-004**: The same skill vendored at the same pin on two clean repos yields byte-identical content and identical recorded identity 100% of the time.
+- **SC-005**: Each of the three confusable failure classes — incompatible format, authentication, unreachable — produces a distinct, actionable message; in usability checks a reader can correctly identify which class occurred from the message alone.
+- **SC-006**: Re-running `add` on an unchanged, already-vendored skill changes nothing on disk and reports an idempotent no-op 100% of the time.
+- **SC-007**: Vendoring from a local copy of the library (the 002 path) continues to pass its existing acceptance scenarios unchanged (no regression).
+- **SC-008**: Both consumer commands' help text alone lets an agent succeed on the first attempt: it states purpose and shows at least two runnable examples.
+- **SC-009**: A catalog generated by the tool from a library's skills matches what those skills declare 100% of the time (every skill, every advertised field including topics), and regenerating it on unchanged skills is byte-identical — so `search` never shows a skill or field that the library's skills don't actually declare.
+
+### Previous work
+
+### Epic: SL-227789 — CLI Initialization & Origin Resolution (001, closed)
+
+- **Origin resolution & `init`**: established the single origin resolver (`env > project config > global default`), the `OWNER/REPO[@REF]` origin grammar, and the baseline CLI experience (self-documenting help, errors-as-navigation, two-level output, exit codes) that this slice inherits.
+
+### Feature: 002 — Vendor & Verify Skills (`add` + `verify`, merged)
+
+- **`skillcore` + local `add` + `verify`**: shipped the shared trust primitive (content fingerprint + manifest parse), local-copy vendoring with idempotent no-op / force-on-divergence UX, and the offline integrity gate this slice's remote acquisition writes records for and reuses. This slice extends `add` from a local copy to a remote library and adds `search`; both reuse the same shared core (no parallel implementation).
+
+> External references: this feature is designed against the real PoC origin template repository (`github.com/skillrig/origin-template`, checked out alongside this repo). If its published contract should be tracked as a formal dependency for reading/reference, add it with `sl deps add`.
