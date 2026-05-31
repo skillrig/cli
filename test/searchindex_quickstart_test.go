@@ -35,9 +35,11 @@ package quickstart
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -876,6 +878,43 @@ func newRemoteOrigin(t *testing.T) remoteOrigin {
 	return remoteOrigin{bareDir: bareDir, cloneURL: "file://" + bareDir}
 }
 
+// newRemoteOriginConvention mirrors newRemoteOrigin but rewrites the work-tree
+// index.json so its declared skillrigConvention is `conv` instead of the
+// fixture's 1, before committing and cloning --bare. It is a localized byte
+// rewrite of the single convention token (not a full JSON re-encode), so the rest
+// of the catalog — including the `requires` blocks catalogFile does not model —
+// survives untouched. It is the substrate for the remote convention-gate test.
+func newRemoteOriginConvention(t *testing.T, conv int) remoteOrigin {
+	t.Helper()
+	requireGit(t)
+
+	work := t.TempDir()
+	copyTree(t, sampleOriginDir(t), work)
+
+	// Localized rewrite: flip the declared convention from the fixture's 1 to conv.
+	indexPath := filepath.Join(work, "index.json")
+	before := readFile(t, indexPath)
+	after := strings.Replace(before, `"skillrigConvention": 1`, fmt.Sprintf(`"skillrigConvention": %d`, conv), 1)
+
+	if after == before {
+		t.Fatalf("index.json did not contain the expected convention token to rewrite:\n%s", before)
+	}
+
+	if err := os.WriteFile(indexPath, []byte(after), 0o644); err != nil {
+		t.Fatalf("rewrite index.json convention: %v", err)
+	}
+
+	git(t, work, "init", "-q", "-b", "main")
+	git(t, work, "add", "-A")
+	git(t, work, "commit", "-q", "-m", "origin fixture (convention "+strconv.Itoa(conv)+")")
+	git(t, work, "tag", pinTag)
+
+	bareDir := filepath.Join(t.TempDir(), "origin.git")
+	git(t, work, "clone", "-q", "--bare", work, bareDir)
+
+	return remoteOrigin{bareDir: bareDir, cloneURL: "file://" + bareDir}
+}
+
 // rawTree returns the RAW-git tree-SHA of the sample skill subtree at ref in the
 // bare origin (the independent oracle, D11). The bare repo carries the full
 // history, so `git rev-parse <ref>:<path>` resolves the same tree object the CLI
@@ -1364,6 +1403,42 @@ func TestQuickstart_AddPrivateNotFoundHintsAuth(t *testing.T) {
 	// The D4 subtlety: an unauthenticated not-found adds the authenticate hint.
 	if !strings.Contains(res.stderr, "authenticate") {
 		t.Errorf("private-not-found should add the 'if private, authenticate' hint, got:\n%s", res.stderr)
+	}
+}
+
+// TestQuickstart_AddRemoteConventionMismatch (FIX-4/H1) — a file:// origin whose
+// index.json declares skillrigConvention 2 is rejected by the remote add's
+// convention gate end-to-end: exit 1 with the IncompatibleConvention what/why/fix,
+// and NOTHING written (no .agents/, no .skillrig/ in the consumer). This proves
+// gateRemoteConvention runs over the real remote-fetch path before any vendoring.
+func TestQuickstart_AddRemoteConventionMismatch(t *testing.T) {
+	t.Parallel()
+
+	o := newRemoteOriginConvention(t, 2)
+	c := newRemoteConsumer(t, o)
+
+	res := c.add(t, sampleSkill)
+	if res.exit != 1 {
+		t.Fatalf("convention-2 remote add exit = %d, want 1 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	if res.stdout != "" {
+		t.Errorf("error path must keep stdout empty, got: %q", res.stdout)
+	}
+
+	// The IncompatibleConvention rendering: what (a convention mismatch), why, and
+	// the fix that points at updating skillrig.
+	assertContains(t, "what", res.stderr, "convention")
+	assertContains(t, "why", res.stderr, "why:")
+	assertContains(t, "fix", res.stderr, "update skillrig")
+
+	// The gate runs BEFORE any write: no vendored tree and no lock must exist.
+	if _, err := os.Stat(filepath.Join(c.root, ".agents")); !os.IsNotExist(err) {
+		t.Errorf(".agents/ must not exist after a gated remote add, stat err = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(c.root, ".skillrig")); !os.IsNotExist(err) {
+		t.Errorf(".skillrig/ must not exist after a gated remote add, stat err = %v", err)
 	}
 }
 

@@ -215,7 +215,16 @@ func ClassifyGitError(err *GitError) error {
 	switch {
 	case containsAny(stderr, "Authentication failed", "Invalid username or token"):
 		return &AuthError{Cause: err}
-	case containsAny(stderr, "Could not resolve host", "Failed to connect"):
+	case containsAny(
+		stderr,
+		"Could not resolve host",
+		"Failed to connect",
+		// Local (file://-or-path) origins that are missing or not a repo fail
+		// with these anchors instead of a host/connect error; neither contains
+		// "not found", so isRepoNotFound is unaffected and auth is matched above.
+		"Could not read from remote repository",
+		"does not appear to be a git repository",
+	):
 		return &UnreachableError{Cause: err}
 	case isRepoNotFound(stderr):
 		return &NotFoundError{Cause: err}

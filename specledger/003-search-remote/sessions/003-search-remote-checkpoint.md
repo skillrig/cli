@@ -100,3 +100,22 @@
 - Checkpoint missed this by checking test-function *existence*, not execution. **Add `grep -rn "t.Skip" test/` to the checkpoint routine**; treat any skipped acceptance scenario as an unmet DoD, not a pass.
 
 ---
+
+## Remediation + Re-review: 2026-05-31 (HEAD `5f90a82`)
+
+**Remediation** (focused workflow, 4 phases, HARD gate = no skipped acceptance test + the 10 remote scenarios MUST run+pass) closed all deep-dive findings. **Independently verified:** `make check` 0 lint, `go test -count=1` pass, **11 remote `TestQuickstart_*` RUN+PASS, 0 skipped acceptance scenarios**, fresh `skillrig index` emits lowercase + unescaped `requires`. Fixes confirmed real in code: `file://`/local-path origin form (`origin.IsLocal()`), remote `search` fetch (`FetchCatalog`), `gateRemoteConvention` on add (H1), distinct `NoSuchVersionError` on a failed pin *checkout* only (C3), `json:` tags + `SetEscapeHTML(false)` (M1), de-circularized `IndexMatchesCommitted`. The verify gate even caught its own incomplete `>=` escaping fix and finished it. Origin repo re-indexed clean (`79d23f4`).
+
+**Independent cold re-review** (Opus, HEAD `5f90a82`) — **verdict: "the remote keystone is now GENUINELY built and HONESTLY tested. The remediation is real, not theater."** The central suspicion (is the `file://` substrate a real clone or a working-tree masquerade?) was cleared: real `git clone --bare` over `file://`, RAW-git tree-SHA oracle, no circular oracle; the reviewer hand-reproduced the full `search→add→verify` round-trip + every error class. 4 new findings, **0 CRITICAL / 0 HIGH**:
+
+| # | Sev | Type | Disposition |
+|---|-----|------|-------------|
+| F1 | MEDIUM | oversight | Remote `add` convention gate correct (verified) but lacked an acceptance test → **fixing** (`TestQuickstart_AddRemoteConventionMismatch`). |
+| F2 | MEDIUM | oversight | Token-injection argv (`-c http.extraHeader=…`) verified by inspection only → **fixing** (unit test of `authConfigArgs` format + `Clone` argv ordering; security-relevant). |
+| F3 | LOW | conscious-by-omission | A missing/unreachable `file://`/local origin renders generically (not `UnreachableError`) — `ClassifyGitError` matched only GitHub-shaped stderr → **fixing** (add local-git stderr anchors). |
+| F4 | LOW | **conscious — WON'T-FIX (documented)** | Asymmetric convention gating: a remote `OWNER/REPO` *with* a 002 local checkout is convention-gated on `search` but not on `add` (which takes the ungated 002 `acquireLocal` path). **Accepted:** consistent with 002 (which had no catalog), the local checkout is operator-controlled, and the remote-fetch `add` (the FR-006 path) IS gated. Revisit only if the local-checkout `add` form gains a catalog dependency. |
+
+**Confirmed-good by the re-reviewer:** no dead code, option-injection guards present, `file://` vs bare-path handling correct, idempotent/force/dry-run over remote correct, 002 local-path suite (22 scenarios) intact, https remote path intact.
+
+**Disposition:** F1/F2/F3 being closed in a focused follow-up (green-gated: make check + the new tests run+pass + no new skips). F4 accepted as above. After that → PR-ready; remaining non-blocking items are the deferred Constitution IX skill evals, the team-approved constitution amendment, and pushing the `skillrig-origin` repo.
+
+---

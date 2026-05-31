@@ -335,3 +335,70 @@ func TestClassifyFetchError_PopulatesOrigin(t *testing.T) {
 		}
 	})
 }
+
+// TestClassifyGitError_LocalUnreachable pins F3: a missing/unreachable LOCAL
+// (file:// or path) origin fails with git's local anchors — "does not appear to
+// be a git repository" / "Could not read from remote repository" — which carry
+// no "not found" substring, so they must classify as *UnreachableError rather
+// than falling through to a generic *GitError. The host/connect anchors and the
+// auth/not-found classes stay in their own buckets (no overlap).
+func TestClassifyGitError_LocalUnreachable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		stderr string
+		want   classifyClass
+	}{
+		{
+			name:   "local path is not a git repository (the F3 anchor)",
+			stderr: "fatal: '/x' does not appear to be a git repository",
+			want:   classFetchUnreachable,
+		},
+		{
+			name:   "could not read from a missing local remote",
+			stderr: "fatal: Could not read from remote repository.\nPlease make sure you have the correct access rights",
+			want:   classFetchUnreachable,
+		},
+		{
+			name:   "host resolution still classifies as unreachable (unchanged)",
+			stderr: "fatal: unable to access '...': Could not resolve host: github.com",
+			want:   classFetchUnreachable,
+		},
+		{
+			name:   "auth is still matched before unreachable (no conflict)",
+			stderr: "remote: Authentication failed for 'https://github.com/my-org/my-skills/'",
+			want:   classFetchAuth,
+		},
+		{
+			name:   "repository-not-found is unaffected (no local anchor matches)",
+			stderr: "fatal: repository 'https://github.com/my-org/my-skills/' not found",
+			want:   classFetchNotFound,
+		},
+		{
+			name:   "an unrecognized stderr stays a raw *GitError",
+			stderr: "fatal: something else entirely",
+			want:   classFetchRaw,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			in := &GitError{ExitCode: 128, Stderr: tt.stderr}
+
+			out := ClassifyGitError(in)
+
+			if got := classifyClassOf(out); got != tt.want {
+				t.Fatalf("ClassifyGitError class = %v, want %v (err: %v)", got, tt.want, out)
+			}
+
+			// The raw *GitError must always remain reachable for --verbose.
+			var ge *GitError
+			if !errors.As(out, &ge) {
+				t.Fatalf("classified error %v does not unwrap to *GitError", out)
+			}
+		})
+	}
+}
