@@ -1,5 +1,15 @@
 <!--
   Sync Impact Report
+  Version change: 2.1.0 → 2.1.1 (terminology patch — 2026-05-31, resolves issue #7)
+    - §III ground-truth: "skills/*/skill.toml walk" → "skills/*/SKILL.md frontmatter walk
+      (skillrig index)"; mise `[[requires]]` → `metadata.x-skillrig.requires` (manifest moved
+      to SKILL.md frontmatter in 003/S1).
+    - §III testing tiers: the GitHub "httptest + go-vcr" Unit boundary → the pkg/skillcore git
+      exec-stub seam (skillrig shells `git`; the fetch/integrity boundary is the git exec, not
+      an HTTP API), matching 003's remote-fetch design.
+    - §IX: corrected the eval tooling path to .agents/skills/skill-creator/scripts/run_eval.py.
+    No principle changes.
+  ---
   Version change: 2.0.0 → 2.1.0 (amendment)
   Added principles:
     III. Ground-Truth Anchoring (new) — real-output fixtures per integration boundary + testing tiers
@@ -73,13 +83,16 @@ fixtures, AND tests that all agree with each other and with nothing real.
 skillrig's integration boundaries and their ground-truth sources:
 - **git origin** — a real skill subtree's git tree SHA and `git ls-tree` output for
   a known commit (the label-honesty primitive, cli.md §4.2).
-- **mise** — actual `mise` resolution/version output for a backing CLI in `[[requires]]`.
+- **mise** — actual `mise` resolution/version output for a backing CLI declared in its
+  `metadata.x-skillrig.requires` (the `SKILL.md` frontmatter manifest, since 003/S1).
 - **GitHub** — a real API/PR response on the `bump --pr` path, scrubbed of tokens.
-- **index.json** — generated from a real `skills/*/skill.toml` walk, not authored by hand.
+- **index.json** — generated from a real `skills/*/SKILL.md` frontmatter walk (`skillrig index`), not authored by hand.
 
 **Testing tiers:**
-- **Unit:** mocked/recorded boundaries — `httptest` + go-vcr cassettes for the
-  GitHub path — for fast, deterministic tests.
+- **Unit:** mocked/recorded boundaries via the `pkg/skillcore` git **exec-stub seam**
+  (`commandContext`) — skillrig shells `git`, so the fetch/integrity boundary is the
+  `git` exec, not an HTTP API; **no `httptest`/go-vcr**. Remote fetch is exercised over a
+  `file://` bare-repo substrate — for fast, deterministic, offline tests.
 - **E2E:** full `skillrig` binary invocation against a fixture origin, validating
   real output and exit codes. E2E tests carry the §II output-shape assertions.
 
@@ -129,9 +142,9 @@ elegance.
 Every new CLI feature or command change MUST ship with a corresponding skill
 update. The skill's description keywords MUST reflect how users actually phrase
 requests — including failure modes and adjacent contexts (CI, `gh`/mise auth).
-Use the `skill-creator` skill at `.claude/skills/skill-creator/` to test trigger
-accuracy and run evals (`scripts/run_eval.py`) after changes. A feature is not
-complete until its skill coverage is verified.
+Use the `skill-creator` skill at `.agents/skills/skill-creator/` to test trigger
+accuracy and run evals (`.agents/skills/skill-creator/scripts/run_eval.py`) after
+changes. A feature is not complete until its skill coverage is verified.
 
 **One consolidated skill, not one-per-command.** There is a SINGLE user-facing
 agent skill for the whole CLI — `.agents/skills/skillrig/` — with a short root
@@ -221,4 +234,4 @@ be justified against Principles VI, VII, and VIII. The binding CLI design contra
 is [docs/design/cli.md](../../docs/design/cli.md); changes to CLI behavior must
 remain consistent with it.
 
-**Version**: 2.1.0 | **Ratified**: 2026-05-24 | **Last Amended**: 2026-05-24
+**Version**: 2.1.1 | **Ratified**: 2026-05-24 | **Last Amended**: 2026-05-31

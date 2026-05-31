@@ -1,0 +1,23 @@
+[
+  {"query": "I'm about to add a `bump` subcommand to our skillrig Go CLI under internal/cli. Before I start, pull up the org's coding rules that apply to this repo so I write it compliant from the get-go.", "should_trigger": true},
+  {"query": "before i refactor config.ResolveOrigin can you load whatever qodo coding standards we have for /skillrig/cli/", "should_trigger": true},
+  {"query": "starting work on the TestQuickstart_ integration tests in test/ — what conventions does our team enforce that I should follow up front?", "should_trigger": true},
+  {"query": "qodo's review keeps flagging FetchSkill for doing an HTTPS clone, but network fetch is literally what the `add` command does. can we fix the rule instead of the code?", "should_trigger": true},
+  {"query": "that //go:build integration tag rule is wrong for us — we separate integration tests by the test/ directory, no build tag. turn the rule off.", "should_trigger": true},
+  {"query": "the rule that blocks introducing new go modules is too strict now that we deliberately approved yaml.v3 — downgrade it from error to warning", "should_trigger": true},
+  {"query": "which qodo rule generated this PR comment about 'verification must be offline and deterministic'? i want to narrow its scope so it stops hitting the fetch layer", "should_trigger": true},
+  {"query": "our automated reviewer declined PR #8 for three reasons that are all deliberate, documented decisions. help me go through each and decide which governing rules to modify or deactivate.", "should_trigger": true},
+  {"query": "deactivate qodo rule 782685, it conflicts with the test-layout convention in our CLAUDE.md", "should_trigger": true},
+  {"query": "this org coding rule is stale — it predates the network boundary we added in 003. edit its content to add a carve-out exception for the clone/sparse-fetch path.", "should_trigger": true},
+
+  {"query": "commit this branch, push it, open a PR with the gh cli, and wait for the qodo bot's review to land", "should_trigger": false},
+  {"query": "take the qodo review findings from PR #8 and post them as inline comments on the github pull request", "should_trigger": false},
+  {"query": "review my current git diff for correctness bugs and flag anything risky before I push", "should_trigger": false},
+  {"query": "pull in the terraform-review skill from our skills library and pin it to v1.4.0", "should_trigger": false},
+  {"query": "run the check that the vendored skills in .agents/skills haven't been tampered with", "should_trigger": false},
+  {"query": "write a Go function that parses the YAML frontmatter out of a SKILL.md file and returns the metadata.x-skillrig map", "should_trigger": false},
+  {"query": "explain the GDPR data-retention obligations for our EU customer records", "should_trigger": false},
+  {"query": "golangci-lint is erroring on an unused variable in internal/cli/root.go, what's the proper way to silence it", "should_trigger": false},
+  {"query": "rename the field repoPath to originPath everywhere in the internal/config package", "should_trigger": false},
+  {"query": "how do I point the qodo CLI at a different model in ~/.qodo/config.json?", "should_trigger": false}
+]
