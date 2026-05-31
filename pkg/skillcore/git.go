@@ -176,15 +176,27 @@ func (c *gitClient) FetchSparse(
 	return tmpDir, nil
 }
 
-// fetchSparseInto performs the three git steps of FetchSparse against an existing
-// dir, keeping FetchSparse's temp-dir lifecycle (create/cleanup) separate from the
-// git sequence so the error path has a single cleanup site.
+// fetchSparseInto performs the git steps of FetchSparse against an existing dir,
+// keeping FetchSparse's temp-dir lifecycle (create/cleanup) separate from the git
+// sequence so the error path has a single cleanup site.
+//
+// It distinguishes the two failure phases (FIX-3): a failure in the CLONE phase
+// (the clone, or the post-clone fetch of an off-tip ref) is a repo/auth/
+// unreachable problem; a failure in the CHECKOUT of ref is a missing VERSION.
+// Each phase's *GitError is wrapped in a *fetchStepError so classifyFetchError can
+// promote only a checkout-step failure of a --pin to NoSuchVersionError.
+//
+// FIX-6: a commit SHA pinned with --pin is not reachable by the tip-only sparse
+// clone, so an off-tip ref is materialized with an explicit `git fetch origin
+// <ref>` before checkout. A branch/tag already present from the clone makes the
+// fetch a harmless no-op-equivalent; a fetch failure is folded into the clone
+// phase (the object is unreachable in the repo, same class as a bad clone).
 func (c *gitClient) fetchSparseInto(
 	ctx context.Context,
 	dir, repoURL, skillPath, ref, token string,
 ) error {
 	if err := c.Clone(ctx, repoURL, dir, token); err != nil {
-		return err
+		return &fetchStepError{step: stepClone, err: err}
 	}
 
 	auth := authConfigArgs(token)
@@ -193,15 +205,95 @@ func (c *gitClient) fetchSparseInto(
 	sparseArgs = append(sparseArgs, "-C", dir, "sparse-checkout", "set", "--", skillPath)
 
 	if _, err := c.run(ctx, sparseArgs...); err != nil {
-		return err
+		return &fetchStepError{step: stepClone, err: err}
 	}
+
+	// Materialize an off-tip ref (an arbitrary commit SHA, FIX-6). If ref is
+	// already a fetched tip (branch/tag), this fetch fails harmlessly; only the
+	// checkout below is authoritative for ref existence, so a fetch failure is
+	// classified with the clone phase, never as a missing version.
+	fetchArgs := append([]string{}, auth...)
+	fetchArgs = append(fetchArgs, "-C", dir, "fetch", "--depth", "1", "origin", ref)
+	_, _ = c.run(ctx, fetchArgs...)
 
 	checkoutArgs := append([]string{}, auth...)
 	checkoutArgs = append(checkoutArgs, "-C", dir, "checkout", ref)
 
-	_, err := c.run(ctx, checkoutArgs...)
+	if _, err := c.run(ctx, checkoutArgs...); err != nil {
+		return &fetchStepError{step: stepCheckout, err: err}
+	}
 
-	return err
+	return nil
+}
+
+// fetchStep identifies which phase of fetchSparseInto failed, so the failure can
+// be classified as a repo problem (clone) versus a missing version (checkout).
+type fetchStep int
+
+const (
+	stepClone    fetchStep = iota // clone / sparse-cone / object fetch — repo/auth/unreachable
+	stepCheckout                  // checkout of the requested ref — version existence
+)
+
+// fetchStepError wraps a *GitError with the phase that produced it. It is
+// internal to skillcore's fetch layer; classifyFetchError unwraps it to decide
+// whether a --pin failure is a missing version (checkout) or a missing/private
+// repo (clone). It still unwraps to the underlying *GitError for --verbose.
+type fetchStepError struct {
+	step fetchStep
+	err  error
+}
+
+func (e *fetchStepError) Error() string { return e.err.Error() }
+func (e *fetchStepError) Unwrap() error { return e.err }
+
+// FetchFile fetches the bytes of a single repo-relative file from repoURL at ref
+// without materializing a working tree: it clones partial + no-checkout into a
+// fresh temp dir, then `git show <ref>:<file>` streams the blob (the partial
+// clone fetches just that object on demand). token is injected per invocation via
+// -c http.extraHeader when non-empty (research D4/D7). It is the catalog fetch's
+// transport (FetchCatalog) — one git transport for both the skill subtree and
+// index.json. The temp dir is removed before returning; only the bytes survive.
+func (c *gitClient) FetchFile(
+	ctx context.Context,
+	repoURL, file, ref, token string,
+) ([]byte, error) {
+	if strings.HasPrefix(file, "-") {
+		return nil, &GitError{
+			ExitCode: -1,
+			Stderr:   "refusing to use a path that begins with '-': " + file,
+		}
+	}
+
+	if strings.HasPrefix(ref, "-") {
+		return nil, &GitError{
+			ExitCode: -1,
+			Stderr:   "refusing to use a ref that begins with '-': " + ref,
+		}
+	}
+
+	tmpDir, err := os.MkdirTemp("", "skillrig-catalog-*")
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	if err := c.Clone(ctx, repoURL, tmpDir, token); err != nil {
+		return nil, &fetchStepError{step: stepClone, err: err}
+	}
+
+	auth := authConfigArgs(token)
+
+	showArgs := append([]string{}, auth...)
+	showArgs = append(showArgs, "-C", tmpDir, "show", ref+":"+file)
+
+	out, err := c.run(ctx, showArgs...)
+	if err != nil {
+		return nil, &fetchStepError{step: stepCheckout, err: err}
+	}
+
+	return []byte(out), nil
 }
 
 // revParse runs `git -C <gitDir> rev-parse <rev>` using the default client (the
@@ -275,4 +367,15 @@ func FetchSparse(
 	repoURL, skillPath, ref, token string,
 ) (string, error) {
 	return newGitClient().FetchSparse(ctx, repoURL, skillPath, ref, token)
+}
+
+// FetchFile fetches the bytes of a single repo-relative file from repoURL at ref
+// using the default client (the real git binary), authenticating with token when
+// non-empty. It is the package-level entry point FetchCatalog dispatches to; the
+// client method underneath stays pluggable for unit tests.
+func FetchFile(
+	ctx context.Context,
+	repoURL, file, ref, token string,
+) ([]byte, error) {
+	return newGitClient().FetchFile(ctx, repoURL, file, ref, token)
 }

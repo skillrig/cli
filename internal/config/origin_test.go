@@ -16,6 +16,10 @@ func TestParseOrigin(t *testing.T) {
 		wantOwner string
 		wantRepo  string
 		wantRef   string
+		// wantLocal asserts the LOCAL form (FIX-1): a non-empty wantPath suffix the
+		// resolved Path must end with (the path is made absolute, so an exact match
+		// is environment-dependent — assert the suffix). Owner/Repo must be empty.
+		wantPathSuffix string
 	}{
 		{name: "valid", in: "my-org/my-skills", wantOwner: "my-org", wantRepo: "my-skills"},
 		{name: "valid with dots and underscores", in: "my.org_1/skills.v2_x", wantOwner: "my.org_1", wantRepo: "skills.v2_x"},
@@ -25,11 +29,16 @@ func TestParseOrigin(t *testing.T) {
 		{name: "commit ref", in: "my-org/my-skills@9f2c1a0", wantOwner: "my-org", wantRepo: "my-skills", wantRef: "9f2c1a0"},
 		{name: "branch ref with slash", in: "my-org/my-skills@feature/auth", wantOwner: "my-org", wantRepo: "my-skills", wantRef: "feature/auth"},
 		{name: "ref with surrounding whitespace trimmed", in: "  my-org/my-skills@staging\n", wantOwner: "my-org", wantRepo: "my-skills", wantRef: "staging"},
+		// FIX-1 local forms: an absolute path and a file:// URL are the LOCAL form
+		// (Path set, Owner/Repo empty) — the seam for FR-011 and the file:// test
+		// substrate. The absolute path "/my-skills" is no longer an error (it was
+		// the old "missing owner" remote case).
+		{name: "absolute path is local", in: "/my-skills", wantPathSuffix: "/my-skills"},
+		{name: "file url is local", in: "file:///tmp/origin.git", wantPathSuffix: "file:///tmp/origin.git"},
 		{name: "empty", in: "", wantErr: true},
 		{name: "blank whitespace", in: "   ", wantErr: true},
 		{name: "no slash", in: "my-org-my-skills", wantErr: true},
 		{name: "missing repo", in: "my-org/", wantErr: true},
-		{name: "missing owner", in: "/my-skills", wantErr: true},
 		{name: "too many segments", in: "my-org/team/skills", wantErr: true},
 		{name: "illegal char", in: "my org/my skills", wantErr: true},
 		{name: "trailing at with empty ref", in: "my-org/my-skills@", wantErr: true},
@@ -53,6 +62,18 @@ func TestParseOrigin(t *testing.T) {
 
 			if err != nil {
 				t.Fatalf("ParseOrigin(%q) unexpected error: %v", tc.in, err)
+			}
+
+			if tc.wantPathSuffix != "" {
+				if got.Owner != "" || got.Repo != "" {
+					t.Errorf("ParseOrigin(%q) = %+v, want local form (empty Owner/Repo)", tc.in, got)
+				}
+
+				if !got.IsLocal() || !strings.HasSuffix(got.Path, tc.wantPathSuffix) {
+					t.Errorf("ParseOrigin(%q).Path = %q, want suffix %q (IsLocal=%v)", tc.in, got.Path, tc.wantPathSuffix, got.IsLocal())
+				}
+
+				return
 			}
 
 			if got.Owner != tc.wantOwner || got.Repo != tc.wantRepo || got.Ref != tc.wantRef {

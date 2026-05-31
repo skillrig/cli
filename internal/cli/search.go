@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -95,7 +97,7 @@ func (sc *searchCmd) run(cmd *cobra.Command) error {
 		return usageNotGitRepo(searchNotGitRepoWhy, err)
 	}
 
-	catalog, err := loadCatalog(repoRoot, res.Origin)
+	catalog, err := loadCatalog(cmd.Context(), repoRoot, res.Origin)
 	if err != nil {
 		return mapSearchError(res.Origin.String(), err)
 	}
@@ -109,17 +111,67 @@ func (sc *searchCmd) run(cmd *cobra.Command) error {
 	return renderSearchResult(cmd.OutOrStdout(), res.Origin.String(), matches, sc.opts.json)
 }
 
-// loadCatalog reads the origin's index.json (anchored at repoRoot) and parses
-// it. This release resolves the origin to a local checkout at
-// <repo-root>/OWNER/REPO (the same local form add uses), reading the catalog from
-// disk; fetching it from a remote origin is an additive mode. Parse stays
-// separate from the convention gate so a malformed catalog and an incompatible
-// convention are distinct failures (contract search.md).
-func loadCatalog(repoRoot string, origin config.Origin) (skillcore.Catalog, error) {
-	originDir, _ := originDirRef(origin)
-	catalogPath := filepath.Join(repoRoot, originDir, catalogName)
+// loadCatalog acquires and parses the origin's index.json, choosing the
+// transport from the origin form exactly as add does (FIX-2, contract search.md
+// step 2). The catalog is fetched PER CALL — never cached — so every search sees
+// the origin as it is now:
+//
+//   - bare-path LOCAL origin → read <path>/index.json from disk (no transport);
+//   - remote OWNER/REPO with a local checkout at <repo-root>/OWNER/REPO → read
+//     that checkout's index.json (the 002 local-copy form, kept green);
+//   - otherwise (remote with no checkout, or a file:// origin) → a sparse git
+//     fetch of index.json at the resolved @ref via skillcore.FetchCatalog (the
+//     ONE catalog acquisition path, AP-04).
+//
+// Parse stays separate from the convention gate (run by the caller) so a
+// malformed catalog and an incompatible convention are distinct failures.
+func loadCatalog(ctx context.Context, repoRoot string, origin config.Origin) (skillcore.Catalog, error) {
+	if path, ok := localCatalogPath(repoRoot, origin); ok {
+		return readCatalogFile(path)
+	}
 
-	//nolint:gosec // G304: path is repoRoot + the resolved origin owner/repo + a fixed file name, not attacker-controlled.
+	catalog, err := skillcore.FetchCatalog(ctx, skillcore.CatalogRequest{
+		RepoURL: origin.CloneURL(),
+		Origin:  origin.String(),
+		Ref:     origin.Ref,
+		Local:   origin.IsLocal(),
+	})
+	if err != nil {
+		return skillcore.Catalog{}, err
+	}
+
+	return catalog, nil
+}
+
+// localCatalogPath returns the on-disk index.json path to read when the origin's
+// catalog is available locally (no transport), and false when it must be
+// fetched. A bare-path LOCAL origin (a filesystem path, not a file:// URL) reads
+// <path>/index.json directly; a remote OWNER/REPO reads its 002 local checkout at
+// <repo-root>/OWNER/REPO only when that directory exists. A file:// origin and a
+// checkout-less remote both return false so the caller fetches.
+func localCatalogPath(repoRoot string, origin config.Origin) (string, bool) {
+	if origin.IsLocal() {
+		if strings.HasPrefix(origin.Path, "file://") {
+			return "", false
+		}
+
+		return filepath.Join(origin.Path, catalogName), true
+	}
+
+	originDir, _ := originDirRef(origin)
+	checkout := filepath.Join(repoRoot, originDir)
+
+	if isLocalCheckout(checkout) {
+		return filepath.Join(checkout, catalogName), true
+	}
+
+	return "", false
+}
+
+// readCatalogFile reads and parses a local index.json, tagging the read and parse
+// failures distinctly so mapSearchError can author the right what/why/fix.
+func readCatalogFile(catalogPath string) (skillcore.Catalog, error) {
+	//nolint:gosec // G304: path is the resolved origin path/checkout + a fixed file name, not attacker-controlled.
 	data, err := os.ReadFile(catalogPath)
 	if err != nil {
 		return skillcore.Catalog{}, &catalogReadError{path: catalogPath, cause: err}

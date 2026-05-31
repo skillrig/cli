@@ -65,8 +65,9 @@ metadata:
 // goldenIndexJSON is the committed ground-truth catalog (SC-009 / D2): the exact
 // bytes GenerateCatalog must emit over goldenAlphaSkillMd + goldenBetaSkillMd.
 // Entries are sorted by name; a trailing newline is appended; Require fields
-// serialize with their Go field names (the type carries no json tags) — the
-// golden documents the producer's actual on-disk artifact, not an idealized one.
+// serialize with LOWERCASE keys (tool/version/source/manager) from the type's
+// json tags (FIX-5, data-model §2) — the golden documents the producer's actual
+// on-disk artifact, and its lowercase keys keep the bug from re-hiding.
 const goldenIndexJSON = `{
   "skillrigConvention": 1,
   "origin": "my-org/my-skills",
@@ -83,10 +84,10 @@ const goldenIndexJSON = `{
       "path": "skills/alpha",
       "requires": [
         {
-          "Tool": "terraform",
-          "Version": "\u003e=1.6",
-          "Source": "hashicorp/terraform",
-          "Manager": "mise"
+          "tool": "terraform",
+          "version": ">=1.6",
+          "source": "hashicorp/terraform",
+          "manager": "mise"
         }
       ]
     },

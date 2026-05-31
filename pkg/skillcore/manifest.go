@@ -25,13 +25,17 @@ type Manifest struct {
 }
 
 // Require is one tool dependency declared under metadata."x-skillrig.requires".
-// It is parsed but is deliberately NOT written to the lock — the on-disk
-// manifest stays the single source of truth, read later by doctor.
+// It is parsed from SKILL.md frontmatter (yaml) and serialized into index.json
+// and `search --json` (json). The json tags are lowercase (FIX-5) so the catalog
+// emits "tool"/"version"/… as the data-model §2 specifies — without them
+// encoding/json would default to PascalCase ("Tool"), breaking every catalog
+// consumer. It is deliberately NOT written to the lock — the on-disk manifest
+// stays the single source of truth, read later by doctor.
 type Require struct {
-	Tool    string `yaml:"tool"`
-	Version string `yaml:"version"`
-	Source  string `yaml:"source"`
-	Manager string `yaml:"manager"`
+	Tool    string `yaml:"tool"    json:"tool"`
+	Version string `yaml:"version" json:"version"`
+	Source  string `yaml:"source"  json:"source"`
+	Manager string `yaml:"manager" json:"manager"`
 }
 
 // frontmatter mirrors the agentskills.io SKILL.md frontmatter we consume: the

@@ -12,25 +12,31 @@
 // with raw git, NEVER through skillcore (Constitution III / research D11).
 //
 // SUBSTRATE NOTE (S4 / D6). The remote-acquisition group (US2 remote add, US3
-// --pin, US4 auth/unreachable failures) is specified against a file:// bare
-// repo for the CLI's origin and the pkg/skillcore commandContext stub seam for
-// injected git failures. Neither substrate is reachable from this integration
-// tier against the current binary: the origin resolver accepts only the
-// OWNER/REPO[@REF] shape (a file:// URL is rejected by config.originPattern) and
-// pkg/skillcore.cloneURL hard-codes https://github.com/OWNER/REPO.git with no
-// local/file:// seam, so `add` with no local checkout can only reach github.com
-// over the network — it never clones a t.TempDir bare repo. The commandContext
-// stub is an unexported pkg/skillcore field, reachable only from a
-// pkg/skillcore unit test, not from a built binary. Those scenarios are
-// therefore registered here as t.Skip placeholders (so the contract stays
-// visible and a future un-skip is one edit) and belong, per the quickstart's
-// own "unit-level via the stub seam" note, in pkg/skillcore once a file:// /
-// local-clone fetch seam exists.
+// --pin, US4 auth/unreachable failures) runs against a real file:// bare repo
+// for the CLI's origin (FIX-1 gave config.ParseOrigin a local/file:// form and
+// pkg/skillcore.cloneURL a file:// seam, so `add` with no local checkout clones
+// a t.TempDir bare repo over a real git transport — offline, no github.com).
+// newRemoteOrigin git-inits a working tree (committed + a v-tag), clones it
+// --bare, and binds SKILLRIG_ORIGIN=file://<bare>; the RAW-git oracle reads the
+// expected treeSha straight from that bare repo (never skillcore, D11).
+//
+// Injected git failures (US4 auth/unreachable/private-not-found) are produced
+// at the integration tier by a fake `git` on the binary's PATH (fakeGitBin) that
+// passes every command through to the real git EXCEPT `clone`, which it fails
+// with a crafted (exit 128, stderr) — the integration analog of the
+// pkg/skillcore commandContext stub seam (which, being an unexported field, is
+// only reachable from a pkg/skillcore unit test). The clone-phase failure trips
+// the catalog gate before any subtree is fetched, so the CLI renders the
+// auth/unreachable/not-found class distinctly. The typed-class assertions for
+// those classes live as unit tests in pkg/skillcore (TestClassifyFetchError),
+// per the quickstart's own "unit-level via the stub seam" note.
 package quickstart
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -626,6 +632,15 @@ func TestQuickstart_IndexDeterministic(t *testing.T) {
 // PoC index.json (producer == artifact oracle). The committed fixture
 // index.json is the ground truth; regenerating it MUST reproduce it byte for
 // byte.
+//
+// De-circularization (FIX-5 / M1): byte-equality alone cannot catch the
+// PascalCase-requires-keys bug, because the producer and the committed fixture
+// were generated the same (formerly buggy) way — they would agree on "Tool"
+// just as readily as on "tool". So this also decodes the committed fixture's
+// requires through a struct with `json:"tool"` tags and asserts the field is
+// populated: that fails iff the JSON emits "Tool"/PascalCase (data-model §2),
+// pinning the lowercase-key contract independently of the producer==artifact
+// comparison.
 func TestQuickstart_IndexMatchesCommitted(t *testing.T) {
 	t.Parallel()
 
@@ -640,6 +655,77 @@ func TestQuickstart_IndexMatchesCommitted(t *testing.T) {
 
 	if got != want {
 		t.Errorf("regenerated index.json != committed fixture (producer/artifact drift):\ngot=%s\nwant=%s", got, want)
+	}
+
+	assertRequiresKeysLowercase(t, []byte(want))
+	assertVersionConstraintsUnescaped(t, []byte(want))
+}
+
+// assertVersionConstraintsUnescaped asserts the catalog's raw bytes carry the
+// readable ">=" version constraint, NOT Go's default HTML-escaped ">="
+// (FIX-5/M1). The catalog MUST be marshaled with SetEscapeHTML(false); this
+// raw-byte check is the other half of de-circularizing the producer==artifact
+// oracle so the escaping regression cannot hide behind a matching fixture.
+func assertVersionConstraintsUnescaped(t *testing.T, indexJSON []byte) {
+	t.Helper()
+
+	// "\\u003e" is the 6 ASCII bytes backslash-u-0-0-3-e — Go's HTML-escaped
+	// form of '>'. An interpreted literal (not a raw `...`) is required so the
+	// sequence is those bytes, not a literal '>' rune.
+	if bytes.Contains(indexJSON, []byte("\\u003e")) {
+		t.Errorf("index.json HTML-escapes version constraints (\\u003e) — marshal the catalog "+
+			"with SetEscapeHTML(false) so \">=\" stays readable; got:\n%s", indexJSON)
+	}
+
+	if !bytes.Contains(indexJSON, []byte(">=")) {
+		t.Errorf("index.json has no readable \">=\" constraint — the unescaped-constraint "+
+			"assertion needs at least one to be meaningful; got:\n%s", indexJSON)
+	}
+}
+
+// requiresProbe decodes just the requires list of the first catalog skill via
+// lowercase `json` tags. If the catalog emitted PascalCase keys ("Tool"), Tool
+// would unmarshal to "" — the discriminator the lowercase-key assertion checks.
+type requiresProbe struct {
+	Skills []struct {
+		Requires []struct {
+			Tool    string `json:"tool"`
+			Version string `json:"version"`
+		} `json:"requires"`
+	} `json:"skills"`
+}
+
+// assertRequiresKeysLowercase decodes the catalog and asserts every requires
+// entry's keys are lowercase (data-model §2): a non-empty .tool proves the JSON
+// used "tool", not "Tool". It breaks the circular producer==artifact oracle in
+// IndexMatchesCommitted so the PascalCase-requires bug (FIX-5/M1) cannot hide.
+func assertRequiresKeysLowercase(t *testing.T, indexJSON []byte) {
+	t.Helper()
+
+	var probe requiresProbe
+	if err := json.Unmarshal(indexJSON, &probe); err != nil {
+		t.Fatalf("index.json is not parseable: %v\n%s", err, indexJSON)
+	}
+
+	if len(probe.Skills) == 0 {
+		t.Fatal("index.json has no skills to assert requires-key casing on")
+	}
+
+	sawRequire := false
+
+	for i, s := range probe.Skills {
+		for j, r := range s.Requires {
+			sawRequire = true
+
+			if r.Tool == "" {
+				t.Errorf("skills[%d].requires[%d].tool is empty — requires keys must be lowercase "+
+					"\"tool\"/\"version\" (data-model §2), not PascalCase; got:\n%s", i, j, indexJSON)
+			}
+		}
+	}
+
+	if !sawRequire {
+		t.Fatal("no requires entries found — the lowercase-key assertion needs at least one to be meaningful")
 	}
 }
 
@@ -740,80 +826,613 @@ func TestQuickstart_IndexMissingVersion(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// US2/US3/US4 — remote acquisition, --pin, injected failures.
+// US2/US3/US4 — remote acquisition, --pin, injected failures (file:// substrate)
 //
-// These are specified against a file:// bare repo (the CLI's origin) and the
-// pkg/skillcore commandContext stub seam. As documented in the package header,
-// neither substrate is reachable from a BUILT binary against the current
-// implementation: the origin resolver rejects a file:// URL (config.originPattern
-// is OWNER/REPO[@REF]-only) and pkg/skillcore.cloneURL hard-codes
-// https://github.com/OWNER/REPO.git with no local/file:// seam, so a no-local-copy
-// add can only reach github.com over the network. The stub seam is an unexported
-// pkg/skillcore field, reachable only from a pkg/skillcore unit test.
-//
-// They are registered as skips so the contract stays visible (and a future
-// un-skip is a one-line edit once a file:// / local-clone fetch seam lands in
-// pkg/skillcore/fetch.go). Per the quickstart's own "unit-level via the stub
-// seam" note, the auth/unreachable/not-found classifications belong in
-// pkg/skillcore_test, and the remote add/pin round-trips belong here once the
-// binary can be pointed at a t.TempDir bare repo.
+// The CLI's origin is a real file:// bare repo built in t.TempDir(); add with no
+// local checkout clones it over a real git transport (FIX-1's file:// seam),
+// offline. Every expected treeSha is the RAW-git oracle read straight from that
+// bare repo (rawTreeSHA → `git rev-parse <ref>:<path>`), NEVER skillcore (D11).
 // ---------------------------------------------------------------------------
 
-const remoteSubstrateBlocked = "BLOCKED: needs a file:// / local-clone fetch seam in pkg/skillcore " +
-	"(cloneURL hard-codes https://github.com and the origin resolver rejects file:// URLs); " +
-	"un-skip once add can be pointed at a t.TempDir bare repo — touches non-test code, out of this task's scope"
+// pinTag is the immutable release tag the remote-origin fixture publishes for
+// the sample skill: the full-tag form of the bare semver sampleVersion under the
+// origin's name-vSEMVER scheme. `--pin v1.4.0` expands to exactly this.
+const pinTag = sampleSkill + "-v" + sampleVersion
 
-// Each blocked scenario maps to a quickstart contract so the suite roster
-// reflects the full 003 surface even while the file:// / stub-seam substrate is
-// missing. t.Parallel() then t.Skip keeps them parallel-safe (paralleltest) and
-// turns "un-skip" into a one-line edit once the fetch seam lands.
+// remoteOrigin is a file:// bare-repo origin: a committed working tree (with the
+// sample skill + an index.json + a release tag) pushed into a bare repo. The CLI
+// is pointed at it via SKILLRIG_ORIGIN=file://<bareDir>, so the remote-fetch path
+// clones it without any local checkout.
+type remoteOrigin struct {
+	// bareDir is the bare git repo the CLI clones from (the file:// target).
+	bareDir string
+	// cloneURL is file://<bareDir>, the SKILLRIG_ORIGIN value the CLI resolves.
+	cloneURL string
+}
 
+// newRemoteOrigin builds the file:// bare-repo substrate from the committed
+// sample-origin fixture: it copies the fixture into a work tree, writes its
+// index.json (so the convention gate the remote add runs sees skillrigConvention
+// 1), commits with the pinned identity, tags the release (pinTag), then clones
+// it --bare. The bare repo's default branch is main so an unpinned add resolves
+// the origin @ref (HEAD/main); the tag makes a pinned add reproducible.
+func newRemoteOrigin(t *testing.T) remoteOrigin {
+	t.Helper()
+	requireGit(t)
+
+	work := t.TempDir()
+	copyTree(t, sampleOriginDir(t), work)
+
+	// The committed fixture already ships an index.json; copyTree carried it, so
+	// the convention gate reads skillrigConvention 1 straight from the fixture.
+	git(t, work, "init", "-q", "-b", "main")
+	git(t, work, "add", "-A")
+	git(t, work, "commit", "-q", "-m", "origin fixture")
+	git(t, work, "tag", pinTag)
+
+	bareDir := filepath.Join(t.TempDir(), "origin.git")
+	git(t, work, "clone", "-q", "--bare", work, bareDir)
+
+	return remoteOrigin{bareDir: bareDir, cloneURL: "file://" + bareDir}
+}
+
+// rawTree returns the RAW-git tree-SHA of the sample skill subtree at ref in the
+// bare origin (the independent oracle, D11). The bare repo carries the full
+// history, so `git rev-parse <ref>:<path>` resolves the same tree object the CLI
+// will fetch and fingerprint.
+func (o remoteOrigin) rawTree(t *testing.T, ref string) string {
+	t.Helper()
+
+	return rawTreeSHA(t, o.bareDir, ref, originSubtree)
+}
+
+// remoteConsumer is a fresh git repo (no origin checkout) that vendors from a
+// file:// origin via SKILLRIG_ORIGIN.
+type remoteConsumer struct {
+	root     string
+	cloneURL string
+}
+
+// newRemoteConsumer git-inits a consumer repo bound (via env at call sites) to
+// the remote origin. There is NO local OWNER/REPO checkout under it, so add must
+// take the remote-fetch path against the file:// origin.
+func newRemoteConsumer(t *testing.T, o remoteOrigin) remoteConsumer {
+	t.Helper()
+	requireGit(t)
+
+	root := t.TempDir()
+	git(t, root, "init", "-q", "-b", "main")
+
+	return remoteConsumer{root: root, cloneURL: o.cloneURL}
+}
+
+// add runs `skillrig add args...` in the consumer with the origin bound via
+// SKILLRIG_ORIGIN=file://<bare> (the env precedence the resolver honors).
+func (c remoteConsumer) add(t *testing.T, args ...string) runResult {
+	t.Helper()
+
+	return run(t, runOpts{
+		args: append([]string{"add"}, args...),
+		cwd:  c.root,
+		env:  map[string]string{"SKILLRIG_ORIGIN": c.cloneURL},
+	})
+}
+
+// verify runs `skillrig verify` in the consumer. verify reads the lock + git and
+// needs no origin, so no SKILLRIG_ORIGIN is bound — proving the vendored result
+// stands on its own after a remote add.
+func (c remoteConsumer) verify(t *testing.T, args ...string) runResult {
+	t.Helper()
+
+	return run(t, runOpts{args: append([]string{"verify"}, args...), cwd: c.root})
+}
+
+// fakeGitBin writes a `git` shim into a fresh dir and returns the dir, for
+// prepending to the binary's PATH. The shim passes EVERY git invocation through
+// to the real git EXCEPT `clone`, which it fails with the crafted (exit 128,
+// stderr) — the integration analog of pkg/skillcore's commandContext stub seam.
+// gitToplevel (rev-parse) still succeeds, so the failure surfaces precisely at
+// the remote fetch's clone phase (the catalog gate), letting the CLI render the
+// auth/unreachable/not-found class distinctly.
+func fakeGitBin(t *testing.T, stderr string) string {
+	t.Helper()
+
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not on PATH; skipping injected-failure scenario")
+	}
+
+	dir := t.TempDir()
+
+	// For `clone` (the first positional arg), emit the crafted stderr and exit
+	// 128; otherwise exec the real git with all args. The crafted stderr is
+	// single-quoted in the heredoc-free script, so it must contain no single quote.
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = clone ]; then\n" +
+		"  printf '%s\\n' " + shellQuote(stderr) + " 1>&2\n" +
+		"  exit 128\n" +
+		"fi\n" +
+		"exec " + shellQuote(realGit) + " \"$@\"\n"
+
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+
+	return dir
+}
+
+// shellQuote single-quotes s for POSIX sh, escaping embedded single quotes.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// addWithFakeGit runs `skillrig add <skill>` against the remote origin with the
+// fake git (failing clones with stderr) prepended to the binary's PATH. The PATH
+// override is placed in opts.env, which os/exec dedupes keeping the last value,
+// so the shim shadows the real git for the child process only.
+func (c remoteConsumer) addWithFakeGit(t *testing.T, stderr string, args ...string) runResult {
+	t.Helper()
+
+	binDir := fakeGitBin(t, stderr)
+
+	return run(t, runOpts{
+		args: append([]string{"add"}, args...),
+		cwd:  c.root,
+		env: map[string]string{
+			"SKILLRIG_ORIGIN": c.cloneURL,
+			"PATH":            binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		},
+	})
+}
+
+// TestQuickstart_AddRemoteNoLocalCopy (US2) — given a file:// origin and NO local
+// checkout, add vendors the subtree byte-identical to the origin, records a lock
+// entry whose treeSha == the RAW-git ground truth, and a subsequent verify (no
+// origin needed) exits 0.
 func TestQuickstart_AddRemoteNoLocalCopy(t *testing.T) {
 	t.Parallel()
-	t.Skip(remoteSubstrateBlocked)
+
+	o := newRemoteOrigin(t)
+	c := newRemoteConsumer(t, o)
+	wantTree := o.rawTree(t, "HEAD")
+
+	res := c.add(t, sampleSkill)
+	if res.exit != 0 {
+		t.Fatalf("remote add exit = %d, want 0 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	// Human shape: bounded (≤ 2 lines) with the verify footer hint.
+	lines := nonEmptyLines(res.stdout)
+	if len(lines) > 2 {
+		t.Errorf("human stdout has %d lines, want <= 2:\n%s", len(lines), res.stdout)
+	}
+
+	if !strings.Contains(res.stdout, "skillrig verify") {
+		t.Errorf("remote add missing the verify footer hint:\n%s", res.stdout)
+	}
+
+	// Vendored byte-identical to the origin fixture, including the exec bit.
+	assertVendoredMatchesFixture(t, c.root)
+
+	// Lock: treeSha == the raw-git ground truth; version is the manifest version.
+	entry := lockEntry(t, c.root, sampleSkill)
+	if entry["treeSha"] != wantTree {
+		t.Errorf("lock treeSha = %v, want raw-git ground truth %s", entry["treeSha"], wantTree)
+	}
+
+	if entry["version"] != sampleVersion {
+		t.Errorf("lock version = %v, want %s", entry["version"], sampleVersion)
+	}
+
+	if entry["path"] != vendoredPath {
+		t.Errorf("lock path = %v, want %s", entry["path"], vendoredPath)
+	}
+
+	if commit, _ := entry["commit"].(string); len(commit) != 40 {
+		t.Errorf("lock commit = %q, want a 40-hex commit SHA", commit)
+	}
+
+	// Commit the vendored result, then verify must exit 0 (the round-trip).
+	commitAll(t, c.root, "vendor remote skill")
+
+	if v := c.verify(t); v.exit != 0 {
+		t.Fatalf("verify after remote add exit = %d, want 0 (stderr: %s)", v.exit, v.stderr)
+	}
 }
 
+// TestQuickstart_AddRemoteIdempotent (US2, SC-006) — re-running a remote add on
+// the unchanged vendored skill reports unchanged, exits 0, and leaves the lock
+// byte-unchanged.
 func TestQuickstart_AddRemoteIdempotent(t *testing.T) {
 	t.Parallel()
-	t.Skip(remoteSubstrateBlocked)
+
+	o := newRemoteOrigin(t)
+	c := newRemoteConsumer(t, o)
+
+	if res := c.add(t, sampleSkill); res.exit != 0 {
+		t.Fatalf("first remote add exit = %d, want 0 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	lockBefore := readFile(t, filepath.Join(c.root, ".skillrig", "skills-lock.json"))
+
+	second := c.add(t, sampleSkill)
+	if second.exit != 0 {
+		t.Fatalf("second remote add exit = %d, want 0 (stderr: %s)", second.exit, second.stderr)
+	}
+
+	if !strings.Contains(second.stdout, "already vendored") && !strings.Contains(second.stdout, "no change") {
+		t.Errorf("idempotent remote re-add should note no change, got:\n%s", second.stdout)
+	}
+
+	if after := readFile(t, filepath.Join(c.root, ".skillrig", "skills-lock.json")); after != lockBefore {
+		t.Errorf("lock changed on idempotent remote re-add:\nbefore=%s\nafter=%s", lockBefore, after)
+	}
+
+	jsonRes := c.add(t, sampleSkill, "--json")
+
+	obj := decodeJSON(t, jsonRes.stdout)
+	if obj["action"] != "unchanged" {
+		t.Errorf("--json action = %v on idempotent remote re-add, want unchanged", obj["action"])
+	}
 }
 
+// TestQuickstart_AddRemoteForceOnDivergence (US2) — a locally-modified vendored
+// skill makes a plain re-add refuse with a --force hint (002 parity over the
+// remote path); --force overwrites it back to the origin content.
 func TestQuickstart_AddRemoteForceOnDivergence(t *testing.T) {
 	t.Parallel()
-	t.Skip(remoteSubstrateBlocked)
+
+	o := newRemoteOrigin(t)
+	c := newRemoteConsumer(t, o)
+
+	if res := c.add(t, sampleSkill); res.exit != 0 {
+		t.Fatalf("initial remote add exit = %d, want 0 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	skillMD := filepath.Join(c.root, vendoredPath, "SKILL.md")
+	appendByte(t, skillMD)
+
+	refused := c.add(t, sampleSkill)
+	if refused.exit != 1 {
+		t.Fatalf("divergent remote re-add (no --force) exit = %d, want 1 (stderr: %s)", refused.exit, refused.stderr)
+	}
+
+	if refused.stdout != "" {
+		t.Errorf("error path must keep stdout empty, got: %q", refused.stdout)
+	}
+
+	assertContains(t, "fix", refused.stderr, "--force")
+
+	// --force restores the origin content and reports overwritten.
+	forced := c.add(t, sampleSkill, "--force", "--json")
+	if forced.exit != 0 {
+		t.Fatalf("forced remote add exit = %d, want 0 (stderr: %s)", forced.exit, forced.stderr)
+	}
+
+	if obj := decodeJSON(t, forced.stdout); obj["action"] != "overwritten" {
+		t.Errorf("--force --json action = %v, want overwritten", obj["action"])
+	}
+
+	originMD := readFile(t, filepath.Join(sampleOriginDir(t), "skills", sampleSkill, "SKILL.md"))
+	if readFile(t, skillMD) != originMD {
+		t.Errorf("--force should restore the remote skill to the origin's content")
+	}
 }
 
+// TestQuickstart_AddRemoteDryRun (US2, C6/FR-020) — a remote add --dry-run prints
+// a bounded preview, exits 0, and leaves the working tree + lock byte-unchanged.
 func TestQuickstart_AddRemoteDryRun(t *testing.T) {
 	t.Parallel()
-	t.Skip(remoteSubstrateBlocked)
+
+	o := newRemoteOrigin(t)
+	c := newRemoteConsumer(t, o)
+
+	res := c.add(t, sampleSkill, "--dry-run")
+	if res.exit != 0 {
+		t.Fatalf("remote add --dry-run exit = %d, want 0 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	if !strings.Contains(res.stdout, "would vendor") {
+		t.Errorf("dry-run human output should be prefixed 'would vendor …', got:\n%s", res.stdout)
+	}
+
+	// Bounded preview.
+	if lines := nonEmptyLines(res.stdout); len(lines) > 2 {
+		t.Errorf("dry-run preview has %d lines, want <= 2:\n%s", len(lines), res.stdout)
+	}
+
+	// Nothing written: no .agents tree, no lock, and a clean working tree.
+	if _, err := os.Stat(filepath.Join(c.root, ".agents")); !os.IsNotExist(err) {
+		t.Errorf(".agents/ must not exist after remote --dry-run, stat err = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(c.root, ".skillrig", "skills-lock.json")); !os.IsNotExist(err) {
+		t.Errorf("lock must not exist after remote --dry-run, stat err = %v", err)
+	}
+
+	if porcelain := statusPorcelain(t, c.root); porcelain != "" {
+		t.Errorf("working tree not clean after remote --dry-run:\n%s", porcelain)
+	}
+
+	jsonRes := c.add(t, sampleSkill, "--dry-run", "--json")
+
+	obj := decodeJSON(t, jsonRes.stdout)
+	requireKeys(t, obj, addResultKeys...)
+
+	if obj["dryRun"] != true {
+		t.Errorf("--json dryRun = %v, want true", obj["dryRun"])
+	}
 }
 
+// TestQuickstart_AddPinnedReproducible (US3, SC-004) — pinning the release tag on
+// TWO clean consumers yields byte-identical content and identical locks (same
+// version/commit/treeSha), and that treeSha is the RAW-git ground truth of the
+// tagged commit.
 func TestQuickstart_AddPinnedReproducible(t *testing.T) {
 	t.Parallel()
-	t.Skip(remoteSubstrateBlocked)
+
+	o := newRemoteOrigin(t)
+	wantTree := o.rawTree(t, pinTag)
+
+	first := newRemoteConsumer(t, o)
+	second := newRemoteConsumer(t, o)
+
+	if res := first.add(t, sampleSkill, "--pin", "v"+sampleVersion); res.exit != 0 {
+		t.Fatalf("first pinned add exit = %d, want 0 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	if res := second.add(t, sampleSkill, "--pin", "v"+sampleVersion); res.exit != 0 {
+		t.Fatalf("second pinned add exit = %d, want 0 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	e1 := lockEntry(t, first.root, sampleSkill)
+	e2 := lockEntry(t, second.root, sampleSkill)
+
+	// treeSha == raw-git ground truth AND identical across the two repos.
+	if e1["treeSha"] != wantTree || e2["treeSha"] != wantTree {
+		t.Errorf("pinned treeSha = %v / %v, want raw-git ground truth %s", e1["treeSha"], e2["treeSha"], wantTree)
+	}
+
+	if e1["commit"] != e2["commit"] {
+		t.Errorf("pinned commit drifted across clean repos: %v vs %v", e1["commit"], e2["commit"])
+	}
+
+	// The recorded version is the resolved tag (pin honesty, data-model §3).
+	if e1["version"] != pinTag {
+		t.Errorf("pinned version = %v, want the resolved tag %s", e1["version"], pinTag)
+	}
+
+	// Byte-identical vendored content across the two pinned consumers.
+	for _, f := range []string{"SKILL.md", "check.sh"} {
+		if readSkillFile(t, first.root, f) != readSkillFile(t, second.root, f) {
+			t.Errorf("pinned vendored %s differs across clean repos", f)
+		}
+	}
 }
 
+// TestQuickstart_AddPinTagFormEquivalent (US3, C3/SC-004) — `--pin v1.4.0`
+// (bare-semver expansion) and `--pin <skill>-v1.4.0` (full-tag literal) resolve
+// to the SAME commit and treeSha, confirming the deterministic --pin rule
+// end-to-end over the file:// origin.
 func TestQuickstart_AddPinTagFormEquivalent(t *testing.T) {
 	t.Parallel()
-	t.Skip(remoteSubstrateBlocked)
+
+	o := newRemoteOrigin(t)
+
+	bare := newRemoteConsumer(t, o)
+	full := newRemoteConsumer(t, o)
+
+	if res := bare.add(t, sampleSkill, "--pin", "v"+sampleVersion); res.exit != 0 {
+		t.Fatalf("bare-semver pin add exit = %d, want 0 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	if res := full.add(t, sampleSkill, "--pin", pinTag); res.exit != 0 {
+		t.Fatalf("full-tag pin add exit = %d, want 0 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	bareEntry := lockEntry(t, bare.root, sampleSkill)
+	fullEntry := lockEntry(t, full.root, sampleSkill)
+
+	if bareEntry["commit"] != fullEntry["commit"] {
+		t.Errorf("bare-semver vs full-tag commit differ: %v vs %v (must be the same tag)", bareEntry["commit"], fullEntry["commit"])
+	}
+
+	if bareEntry["treeSha"] != fullEntry["treeSha"] {
+		t.Errorf("bare-semver vs full-tag treeSha differ: %v vs %v (SC-004)", bareEntry["treeSha"], fullEntry["treeSha"])
+	}
 }
 
+// TestQuickstart_AddPinNotFound (US3, C2/FR-015) — pinning a non-existent version
+// fails exit 1 with the distinct NoSuchVersionError rendering ("has no version" +
+// the pin-does-not-resolve why), NOT the skill-not-found message. The skill and
+// the repo exist; only the requested tag does not.
 func TestQuickstart_AddPinNotFound(t *testing.T) {
 	t.Parallel()
-	t.Skip(remoteSubstrateBlocked)
+
+	o := newRemoteOrigin(t)
+	c := newRemoteConsumer(t, o)
+
+	res := c.add(t, sampleSkill, "--pin", "v9.9.9")
+	if res.exit != 1 {
+		t.Fatalf("pin-not-found add exit = %d, want 1 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	if res.stdout != "" {
+		t.Errorf("error path must keep stdout empty, got: %q", res.stdout)
+	}
+
+	// The NoSuchVersionError rendering is the structured discriminator: it names
+	// the missing version and cites the unresolved pin — distinct from a
+	// skill-not-found ("not found in the origin") class (C2).
+	assertContains(t, "what", res.stderr, "has no version")
+	assertContains(t, "why", res.stderr, "the pin does not resolve")
+
+	if strings.Contains(res.stderr, "not found in the origin") {
+		t.Errorf("pin-not-found must NOT render as skill-not-found (C2: distinct classes), got:\n%s", res.stderr)
+	}
+
+	// The raw git cause is surfaced under --verbose, never swallowed.
+	verbose := c.add(t, sampleSkill, "--pin", "v9.9.9", "--verbose")
+	if verbose.exit != 1 {
+		t.Errorf("--verbose pin-not-found exit = %d, want 1", verbose.exit)
+	}
 }
 
+// TestQuickstart_AddAuthFailureDistinct (US4) — an injected clone auth failure
+// renders as an AUTHENTICATION failure (distinct from not-found/unreachable),
+// pointing at gh auth login / GITHUB_TOKEN; exit 1.
 func TestQuickstart_AddAuthFailureDistinct(t *testing.T) {
 	t.Parallel()
-	t.Skip(remoteSubstrateBlocked)
+
+	o := newRemoteOrigin(t)
+	c := newRemoteConsumer(t, o)
+
+	res := c.addWithFakeGit(t,
+		"remote: Authentication failed for 'https://github.com/my-org/my-skills/'",
+		sampleSkill)
+
+	if res.exit != 1 {
+		t.Fatalf("injected auth-failure add exit = %d, want 1 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	if res.stdout != "" {
+		t.Errorf("error path must keep stdout empty, got: %q", res.stdout)
+	}
+
+	assertContains(t, "what", res.stderr, "authentication failed")
+	// Distinct from unreachable / not-found, and points at the credential fix.
+	if strings.Contains(res.stderr, "could not reach") || strings.Contains(res.stderr, "not found") {
+		t.Errorf("auth failure must be distinct from unreachable/not-found, got:\n%s", res.stderr)
+	}
+
+	if !strings.Contains(res.stderr, "gh auth login") && !strings.Contains(res.stderr, "GITHUB_TOKEN") {
+		t.Errorf("auth failure fix should point at gh auth login / GITHUB_TOKEN, got:\n%s", res.stderr)
+	}
 }
 
+// TestQuickstart_AddUnreachableDistinct (US4) — an injected clone "could not
+// resolve host" failure renders as an UNREACHABLE failure, distinct from
+// auth/not-found; exit 1.
 func TestQuickstart_AddUnreachableDistinct(t *testing.T) {
 	t.Parallel()
-	t.Skip(remoteSubstrateBlocked)
+
+	o := newRemoteOrigin(t)
+	c := newRemoteConsumer(t, o)
+
+	res := c.addWithFakeGit(t,
+		"fatal: unable to access origin: Could not resolve host: github.com",
+		sampleSkill)
+
+	if res.exit != 1 {
+		t.Fatalf("injected unreachable add exit = %d, want 1 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	if res.stdout != "" {
+		t.Errorf("error path must keep stdout empty, got: %q", res.stdout)
+	}
+
+	assertContains(t, "what", res.stderr, "could not reach")
+
+	if strings.Contains(res.stderr, "authentication failed") {
+		t.Errorf("unreachable must be distinct from auth, got:\n%s", res.stderr)
+	}
 }
 
+// TestQuickstart_AddPrivateNotFoundHintsAuth (US4, D4) — an injected clone
+// not-found with no resolved token renders a not-found that ALSO adds the "if
+// private, authenticate" hint, so the agent is not sent to re-check a skill name
+// when the real problem is a missing credential; exit 1.
 func TestQuickstart_AddPrivateNotFoundHintsAuth(t *testing.T) {
 	t.Parallel()
-	t.Skip(remoteSubstrateBlocked)
+
+	o := newRemoteOrigin(t)
+	c := newRemoteConsumer(t, o)
+
+	res := c.addWithFakeGit(t,
+		"fatal: repository 'https://github.com/my-org/my-skills/' not found",
+		sampleSkill)
+
+	if res.exit != 1 {
+		t.Fatalf("injected private-not-found add exit = %d, want 1 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	if res.stdout != "" {
+		t.Errorf("error path must keep stdout empty, got: %q", res.stdout)
+	}
+
+	assertContains(t, "what", res.stderr, "not found")
+	// The D4 subtlety: an unauthenticated not-found adds the authenticate hint.
+	if !strings.Contains(res.stderr, "authenticate") {
+		t.Errorf("private-not-found should add the 'if private, authenticate' hint, got:\n%s", res.stderr)
+	}
+}
+
+// assertVendoredMatchesFixture checks every vendored skill file under root is
+// byte-identical to the committed sample-origin fixture, with modes preserved
+// (the exec bit is part of the tree-SHA). The remote-fetched copy must match the
+// origin source exactly.
+func assertVendoredMatchesFixture(t *testing.T, root string) {
+	t.Helper()
+
+	for _, f := range []string{"SKILL.md", "check.sh"} {
+		got := readSkillFile(t, root, f)
+		want := readFile(t, filepath.Join(sampleOriginDir(t), "skills", sampleSkill, f))
+
+		if got != want {
+			t.Errorf("vendored %s differs from the origin fixture", f)
+		}
+
+		gotMode := fileMode(t, filepath.Join(root, vendoredPath, f))
+		wantMode := fileMode(t, filepath.Join(sampleOriginDir(t), "skills", sampleSkill, f))
+
+		if gotMode != wantMode {
+			t.Errorf("vendored %s mode = %v, want %v", f, gotMode, wantMode)
+		}
+	}
+
+	if execMode := fileMode(t, filepath.Join(root, vendoredPath, "check.sh")); execMode&0o111 == 0 {
+		t.Errorf("vendored check.sh lost its executable bit: mode = %v", execMode)
+	}
+}
+
+// TestQuickstart_SearchRemoteFileOrigin (US1 over the remote substrate) — search
+// against a file:// origin with NO local checkout fetches index.json over the
+// real git transport (FIX-2's per-call catalog fetch) and lists the skill the
+// origin publishes; exit 0 with the complete --json record. This proves search
+// works end-to-end against a remote origin, not just a local catalog on disk.
+func TestQuickstart_SearchRemoteFileOrigin(t *testing.T) {
+	t.Parallel()
+
+	o := newRemoteOrigin(t)
+	c := newRemoteConsumer(t, o)
+
+	res := run(t, runOpts{
+		args: []string{"search", "--json"},
+		cwd:  c.root,
+		env:  map[string]string{"SKILLRIG_ORIGIN": c.cloneURL},
+	})
+	if res.exit != 0 {
+		t.Fatalf("remote search exit = %d, want 0 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	p := decodeSearch(t, res.stdout)
+	if names := searchNames(p); len(names) != 1 || names[0] != sampleSkill {
+		t.Errorf("remote search names = %v, want exactly [%s] (fetched from the file:// origin)", names, sampleSkill)
+	}
+
+	// --json record is structurally complete (every field add needs).
+	obj := decodeJSON(t, res.stdout)
+	requireKeys(t, obj, "origin", "skills")
+
+	rawSkills, ok := obj["skills"].([]any)
+	if !ok || len(rawSkills) == 0 {
+		t.Fatalf("remote search skills not a non-empty array: %v", obj["skills"])
+	}
+
+	entry, ok := rawSkills[0].(map[string]any)
+	if !ok {
+		t.Fatalf("remote search skills[0] not an object: %v", rawSkills[0])
+	}
+
+	requireKeys(t, entry, "name", "version", "namespace", "description", "topics", "path")
 }

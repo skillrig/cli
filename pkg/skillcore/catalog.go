@@ -1,7 +1,10 @@
 package skillcore
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,6 +61,86 @@ type originConfig struct {
 	ConventionVersion int    `toml:"convention_version"`
 	Origin            string `toml:"origin"`
 	SkillsDir         string `toml:"skills_dir"`
+}
+
+// catalogName is the origin's committed catalog file, fetched at the repo root.
+const catalogName = "index.json"
+
+// CatalogRequest names where to fetch the origin's index.json from per call
+// (FIX-4). It is the single catalog-fetch entry point both search and the add
+// convention gate dispatch to (AP-04). The CLI classifies the origin form and
+// fills it in; skillcore neither resolves the origin nor reads config.
+type CatalogRequest struct {
+	// RepoURL is the git transport target — the LOCAL origin's file://<path> or
+	// the remote GitHub HTTPS URL (config.Origin.CloneURL produces it).
+	RepoURL string
+	// Origin is the OWNER/REPO[@REF] (remote) or path (local) identity, used only
+	// for error reporting so a fetch failure names the configured origin.
+	Origin string
+	// Ref is the git ref to read index.json at: the origin's @ref branch, else
+	// HEAD. A bare empty Ref defaults to HEAD.
+	Ref string
+	// Local marks RepoURL as a file:// (local) target: no GitHub token is
+	// resolved, and failures are never the remote auth/private-not-found classes.
+	Local bool
+}
+
+// FetchCatalog fetches the origin's index.json at the request's ref and parses it
+// into a Catalog (FIX-4). It is fetched PER CALL (no cache) through the one git
+// transport (FetchFile) for both the remote and file:// local forms, so search
+// and the add convention gate share exactly one catalog acquisition path
+// (AP-04). The convention version is NOT gated here — callers run CheckConvention
+// against the returned Catalog.SkillrigConvention so parse and policy stay
+// separable. A git failure is classified into the renderable typed errors
+// (Auth/Unreachable/NotFound) the CLI branches on, anchored on the configured
+// origin identity.
+func FetchCatalog(ctx context.Context, req CatalogRequest) (Catalog, error) {
+	ref := req.Ref
+	if ref == "" {
+		ref = "HEAD"
+	}
+
+	var token string
+	if !req.Local {
+		token, _ = ResolveGitHubToken(defaultGitHubHost)
+	}
+
+	data, err := FetchFile(ctx, req.RepoURL, catalogName, ref, token)
+	if err != nil {
+		return Catalog{}, classifyCatalogError(req, err)
+	}
+
+	return ParseCatalog(data)
+}
+
+// classifyCatalogError maps a catalog-fetch git failure onto the renderable typed
+// errors, anchoring each on the configured origin identity (the catalog has no
+// per-skill identity, so Skill is empty and a NotFound reads as "<origin> not
+// found"). A non-*GitError (e.g. a parse error) is returned unchanged.
+func classifyCatalogError(req CatalogRequest, err error) error {
+	var gitErr *GitError
+	if !errors.As(err, &gitErr) {
+		return err
+	}
+
+	classified := ClassifyGitError(gitErr)
+
+	var (
+		authErr  *AuthError
+		unreach  *UnreachableError
+		notFound *NotFoundError
+	)
+
+	switch {
+	case errors.As(classified, &authErr):
+		return &AuthError{Origin: req.Origin, Cause: gitErr}
+	case errors.As(classified, &unreach):
+		return &UnreachableError{Origin: req.Origin, Cause: gitErr}
+	case errors.As(classified, &notFound):
+		return &NotFoundError{Origin: req.Origin, Cause: gitErr}
+	default:
+		return classified
+	}
 }
 
 // ParseCatalog decodes index.json bytes into a Catalog. It does not gate the
@@ -118,12 +201,21 @@ func GenerateCatalog(originRoot string) ([]byte, error) {
 		Skills:             entries,
 	}
 
-	data, err := json.MarshalIndent(catalog, "", "  ")
-	if err != nil {
+	// Encode with HTML-escaping OFF so version constraints stay readable
+	// (">=1.6", not ">=1.6"). json.MarshalIndent always HTML-escapes; a
+	// json.Encoder with SetEscapeHTML(false) is the only way to suppress it.
+	// json.Encoder already appends a trailing newline.
+	var buf bytes.Buffer
+
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+
+	if err := enc.Encode(catalog); err != nil {
 		return nil, fmt.Errorf("encoding catalog: %w", err)
 	}
 
-	return append(data, '\n'), nil
+	return buf.Bytes(), nil
 }
 
 // readOriginConfig parses the origin's .skillrig-origin.toml at originRoot.

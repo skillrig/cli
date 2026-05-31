@@ -127,17 +127,23 @@ func (ac *addCmd) run(cmd *cobra.Command) error {
 }
 
 // addOptionsFor classifies the resolved origin's acquisition form (D3) and builds
-// the skillcore.AddOptions for it. The form is chosen automatically: when the
-// origin is checked out locally at <repo-root>/OWNER/REPO, add reads that local
-// checkout (the 002 path); otherwise it fetches the skill subtree from the remote
-// OWNER/REPO over git. --pin and the destination/lock fields are common to both.
+// the skillcore.AddOptions for it. The form is chosen automatically:
+//
+//   - a file:// / filesystem-path LOCAL origin → remote-fetch form over a real
+//     git transport against that path (RepoURL = origin.CloneURL(), Local), so a
+//     local origin and the file:// test substrate are fetched without a checkout;
+//   - a remote OWNER/REPO checked out at <repo-root>/OWNER/REPO → the 002
+//     local-copy form reading that checkout;
+//   - a remote OWNER/REPO with no checkout → remote-fetch form over GitHub.
+//
+// --pin and the destination/lock fields are common to all. skillcore gates the
+// origin's convention before vendoring in the remote-fetch forms (FIX-4).
 //
 // AR-1: the local checkout is anchored to the repo root, not the process CWD — the
 // destination (.agents/skills + the lock) is already repo-root-anchored via
 // repoRoot, so anchoring the source there too makes add work from any subdirectory.
 func addOptionsFor(origin config.Origin, repoRoot string, ac *addCmd) skillcore.AddOptions {
-	originDir, ref := originDirRef(origin)
-	localCheckout := filepath.Join(repoRoot, originDir)
+	_, ref := originDirRef(origin)
 
 	opts := skillcore.AddOptions{
 		Ref:      ref,
@@ -148,6 +154,18 @@ func addOptionsFor(origin config.Origin, repoRoot string, ac *addCmd) skillcore.
 		Force:    ac.force,
 		DryRun:   ac.dryRun,
 	}
+
+	// A file:// / path LOCAL origin has no OWNER/REPO checkout; fetch it over a
+	// real git transport from its CloneURL (FR-011 + file:// substrate).
+	if origin.IsLocal() {
+		opts.RepoURL = origin.CloneURL()
+		opts.Local = true
+
+		return opts
+	}
+
+	originDir, _ := originDirRef(origin)
+	localCheckout := filepath.Join(repoRoot, originDir)
 
 	if isLocalCheckout(localCheckout) {
 		opts.OriginDir = localCheckout

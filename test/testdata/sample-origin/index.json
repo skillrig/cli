@@ -15,16 +15,16 @@
       "path": "skills/terraform-plan-review",
       "requires": [
         {
-          "Tool": "oxid",
-          "Version": "\u003e=0.4.0",
-          "Source": "my-org/my-skills",
-          "Manager": "mise"
+          "tool": "oxid",
+          "version": ">=0.4.0",
+          "source": "my-org/my-skills",
+          "manager": "mise"
         },
         {
-          "Tool": "terraform",
-          "Version": "\u003e=1.6",
-          "Source": "hashicorp/terraform",
-          "Manager": "mise"
+          "tool": "terraform",
+          "version": ">=1.6",
+          "source": "hashicorp/terraform",
+          "manager": "mise"
         }
       ]
     }

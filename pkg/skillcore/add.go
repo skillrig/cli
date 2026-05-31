@@ -49,11 +49,21 @@ type AddOptions struct {
 	// top-level origin field; it does not parse or resolve it (presentation- and
 	// resolution-free). Empty leaves any existing lock origin untouched.
 	Origin string
-	// Owner and Repo are the remote origin's OWNER/REPO halves. When BOTH are
-	// non-empty, Add takes the remote-fetch path; both empty selects the
-	// local-path form. The CLI classifies the form and fills these in.
+	// Owner and Repo are the remote origin's OWNER/REPO halves. They name the
+	// origin in error reporting and, when RepoURL is empty, derive the GitHub
+	// HTTPS clone URL. They are empty for a file:// local origin (which carries
+	// only RepoURL).
 	Owner string
 	Repo  string
+	// RepoURL is the git transport target for the remote-fetch form when set —
+	// the origin's file://<path> (FR-011, the file:// test substrate) or any
+	// caller-supplied URL. Empty means "derive https://github.com/Owner/Repo.git".
+	// The CLI fills it from config.Origin.CloneURL().
+	RepoURL string
+	// Local marks RepoURL as a file:// (local) target: no GitHub token is
+	// resolved for the fetch, and its failures are never the remote
+	// auth/private-not-found classes. The CLI sets it from config.Origin.IsLocal().
+	Local bool
 	// SkillPath is the repo-relative subtree to fetch in the remote form (the
 	// catalog's path, e.g. "skills/<skill>"). Empty defaults to the conventional
 	// skills/<skill>. Unused by the local-path form.
@@ -67,11 +77,24 @@ type AddOptions struct {
 	DryRun bool
 }
 
-// isRemote reports whether opts selects the remote-fetch form: both OWNER and
-// REPO halves of a remote origin reference are present. The two forms are
-// mutually exclusive, so an absent half means the local-path form (002).
+// isRemote reports whether opts selects the remote-fetch form: an explicit
+// RepoURL (the file:// local origin / test substrate) OR both OWNER and REPO
+// halves of a remote origin reference. The two forms are mutually exclusive, so
+// neither marker present means the LOCAL-PATH checkout form (002).
 func (opts AddOptions) isRemote() bool {
-	return opts.Owner != "" && opts.Repo != ""
+	return opts.RepoURL != "" || (opts.Owner != "" && opts.Repo != "")
+}
+
+// cloneURL derives the git transport target for the remote-fetch form: an
+// explicit RepoURL (the file:// origin) when set, else the GitHub HTTPS URL for
+// OWNER/REPO. The token is never embedded here — git.go injects it via
+// http.extraHeader — so the URL is safe to surface in diagnostics.
+func (opts AddOptions) cloneURL() string {
+	if opts.RepoURL != "" {
+		return opts.RepoURL
+	}
+
+	return "https://" + defaultGitHubHost + "/" + opts.Owner + "/" + opts.Repo + ".git"
 }
 
 // AddResult reports what Add did, for the CLI to render.
@@ -240,9 +263,14 @@ func acquireLocal(opts AddOptions) (acquired, error) {
 	}, nil
 }
 
-// acquireRemote is the remote-fetch form: it resolves the pin to a concrete ref,
-// fetches the skill subtree from OWNER/REPO via FetchSkill (the ONE fetch impl,
-// AP-04), then computes the tree-SHA over the fetched checkout with the same
+// acquireRemote is the remote-fetch form. Before vendoring it GATES the origin's
+// convention (FIX-4 / H1): it fetches the origin's index.json at the origin's
+// @ref and CheckConventions its skillrigConvention EXACT-match (== 1, C1),
+// returning *IncompatibleConventionError when the origin speaks a convention this
+// binary does not implement — so a mismatching origin is refused before any
+// subtree is fetched or written. It then resolves the pin to a concrete ref,
+// fetches the skill subtree from the origin via FetchSkill (the ONE fetch impl,
+// AP-04), and computes the tree-SHA over the fetched checkout with the same
 // TreeSHA verify uses. The fetched temp dir is the caller's to remove, so the
 // returned cleanup removes it.
 //
@@ -251,6 +279,10 @@ func acquireLocal(opts AddOptions) (acquired, error) {
 // to), otherwise empty so Add falls back to the manifest version at the fetched
 // ref (data-model §3).
 func acquireRemote(opts AddOptions) (acquired, error) {
+	if err := gateRemoteConvention(opts); err != nil {
+		return acquired{}, err
+	}
+
 	skillPath := opts.SkillPath
 	if skillPath == "" {
 		skillPath = "skills/" + opts.Skill
@@ -261,6 +293,8 @@ func acquireRemote(opts AddOptions) (acquired, error) {
 	fetch, err := FetchSkill(context.Background(), FetchRequest{
 		Owner:     opts.Owner,
 		Repo:      opts.Repo,
+		RepoURL:   opts.cloneURL(),
+		Local:     opts.Local,
 		Skill:     opts.Skill,
 		SkillPath: skillPath,
 		Ref:       ref,
@@ -286,6 +320,28 @@ func acquireRemote(opts AddOptions) (acquired, error) {
 		version: version,
 		cleanup: cleanup,
 	}, nil
+}
+
+// gateRemoteConvention fetches the origin's index.json at the origin's @ref (NOT
+// the --pin, which addresses a skill tag, not the origin) through the one catalog
+// acquisition path (FetchCatalog, AP-04) and enforces the exact-match convention
+// gate (CheckConvention, C1) before any subtree is fetched or vendored (FIX-4).
+// A convention mismatch surfaces as *IncompatibleConventionError, which the CLI
+// maps via mapConventionError; a fetch failure surfaces as the same
+// Auth/Unreachable/NotFound classes FetchCatalog already classifies, anchored on
+// the origin identity. The catalog is fetched PER add — never cached.
+func gateRemoteConvention(opts AddOptions) error {
+	catalog, err := FetchCatalog(context.Background(), CatalogRequest{
+		RepoURL: opts.cloneURL(),
+		Origin:  opts.Origin,
+		Ref:     opts.Ref,
+		Local:   opts.Local,
+	})
+	if err != nil {
+		return err
+	}
+
+	return CheckConvention(catalog.SkillrigConvention)
 }
 
 // bareSemver matches a bare semantic version, optionally v-prefixed (e.g.

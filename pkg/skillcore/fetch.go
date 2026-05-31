@@ -15,9 +15,21 @@ const defaultGitHubHost = "github.com"
 // skillcore neither resolves the origin nor reads config — it owns only the git
 // transport and the failure classification (AP-06).
 type FetchRequest struct {
-	// Owner and Repo are the OWNER/REPO halves of the remote origin reference.
+	// Owner and Repo are the OWNER/REPO halves of a REMOTE origin reference. They
+	// are used for error reporting (originRef) and, when RepoURL is empty, to
+	// derive the GitHub HTTPS clone URL. They are empty for a LOCAL origin.
 	Owner string
 	Repo  string
+	// RepoURL is the git transport target to clone from when set — the LOCAL
+	// origin's file://<path> (FIX-1, the file:// test substrate AND FR-011) or any
+	// caller-supplied URL. Empty means "derive https://github.com/Owner/Repo.git".
+	// The seam that lets a local-path/file:// origin be fetched without hardcoding
+	// github.com (config.Origin.CloneURL produces this value).
+	RepoURL string
+	// Local marks RepoURL as a file:// (local) target. A local origin needs no
+	// GitHub token and its failures are never the remote auth/private-not-found
+	// classes, so the token is not resolved for it.
+	Local bool
 	// Skill is the skill directory name, used in error reporting so the CLI can
 	// distinguish a missing skill from a missing origin (errors-as-navigation).
 	Skill string
@@ -41,9 +53,15 @@ type FetchResult struct {
 	Commit string
 }
 
-// originRef renders the OWNER/REPO[@REF] reference for error reporting. It is the
-// human-meaningful origin identity the CLI's what/why/fix prose anchors on.
+// originRef renders the origin identity for error reporting — the
+// human-meaningful anchor the CLI's what/why/fix prose uses. For a remote origin
+// it is OWNER/REPO[@REF]; for a LOCAL origin (no Owner/Repo) it is the RepoURL,
+// since that is the only identity the user configured.
 func (r FetchRequest) originRef() string {
+	if r.Owner == "" && r.Repo == "" {
+		return r.RepoURL
+	}
+
 	ref := r.Owner + "/" + r.Repo
 	if r.Ref != "" {
 		ref += "@" + r.Ref
@@ -70,9 +88,18 @@ func (r FetchRequest) originRef() string {
 // On any failure the temp dir FetchSparse created is already cleaned up by that
 // helper, so FetchSkill returns no path to remove.
 func FetchSkill(ctx context.Context, req FetchRequest) (FetchResult, error) {
-	token, authenticated := ResolveGitHubToken(defaultGitHubHost)
+	repoURL := req.cloneURL()
 
-	repoURL := cloneURL(req.Owner, req.Repo)
+	// A local (file://) origin needs no credential and never produces the remote
+	// auth/private-not-found classes, so the token is resolved only for GitHub.
+	var (
+		token         string
+		authenticated bool
+	)
+
+	if !req.Local {
+		token, authenticated = ResolveGitHubToken(defaultGitHubHost)
+	}
 
 	dir, err := FetchSparse(ctx, repoURL, req.SkillPath, req.Ref, token)
 	if err != nil {
@@ -87,37 +114,58 @@ func FetchSkill(ctx context.Context, req FetchRequest) (FetchResult, error) {
 	return FetchResult{Dir: dir, Commit: commit}, nil
 }
 
-// cloneURL builds the HTTPS clone URL for OWNER/REPO. The token is never embedded
-// here — git.go injects it via http.extraHeader (research D4) — so the URL is
-// safe to surface in diagnostics.
-func cloneURL(owner, repo string) string {
-	return "https://" + defaultGitHubHost + "/" + owner + "/" + repo + ".git"
+// cloneURL derives the git transport target for the request: an explicit
+// RepoURL (the LOCAL origin's file://<path>, or any caller-supplied URL) when
+// set, else the GitHub HTTPS URL for OWNER/REPO (FIX-1 — the seam that stops
+// hardcoding github.com so a file:// origin is fetchable). The token is never
+// embedded here — git.go injects it via http.extraHeader (research D4) — so the
+// URL is safe to surface in diagnostics.
+func (r FetchRequest) cloneURL() string {
+	if r.RepoURL != "" {
+		return r.RepoURL
+	}
+
+	return "https://" + defaultGitHubHost + "/" + r.Owner + "/" + r.Repo + ".git"
 }
 
 // classifyFetchError turns a raw fetch failure into the renderable typed error
 // the CLI branches on. It runs the shared ClassifyGitError mapping
-// (Auth/Unreachable/NotFound), then applies the two fetch-specific refinements
-// ClassifyGitError cannot know on its own: a missing-repo failure on a --pin ref
-// is really a missing VERSION (NoSuchVersionError, C2), and a genuine NotFound
-// gets the origin/skill identity plus the no-token authentication flag (D4). A
-// non-*GitError (e.g. an os error from temp-dir creation) is returned unchanged.
+// (Auth/Unreachable/NotFound), then applies the fetch-specific refinements
+// ClassifyGitError cannot know on its own, all anchored on WHICH git phase failed
+// (FIX-3 — the *fetchStepError tag):
+//
+//   - A failed CHECKOUT of a --pin ref is a missing VERSION (NoSuchVersionError,
+//     C2): the repo and skill subtree were cloned fine, only the requested
+//     tag/SHA does not exist. This is the ONLY path that yields NoSuchVersion — a
+//     missing/private/unreachable REPO (a clone-phase failure) never becomes
+//     "no such version" even with --pin (FIX-3 fixes that mis-classification).
+//   - A genuine clone-phase NotFound gets the origin/skill identity plus the
+//     no-token authentication flag (D4).
+//   - Auth/Unreachable get the origin identity populated (FIX-7), which
+//     ClassifyGitError leaves blank.
+//
+// A non-*GitError (e.g. an os error from temp-dir creation) is returned
+// unchanged.
 func classifyFetchError(req FetchRequest, authenticated bool, err error) error {
 	var gitErr *GitError
 	if !errors.As(err, &gitErr) {
 		return err
 	}
 
+	// The phase that failed: a checkout-step failure is about ref/version
+	// existence; everything else (clone, sparse-cone, object fetch) is about the
+	// repo. Absent a step tag (e.g. a rev-parse after the fetch), treat it as a
+	// clone-class repo failure — never a missing version.
+	var stepErr *fetchStepError
+
+	checkoutFailed := errors.As(err, &stepErr) && stepErr.step == stepCheckout
+
 	classified := ClassifyGitError(gitErr)
 
-	var notFound *NotFoundError
-	if !errors.As(classified, &notFound) {
-		return classified
-	}
-
-	// A pin that resolves to no ref is a missing version, not a missing skill:
-	// the skill exists, the requested tag/SHA does not (C2). Callers/CI branch on
-	// the type, never on prose.
-	if req.Pinned {
+	// A pin whose CHECKOUT failed is a missing version, not a missing skill: the
+	// skill exists, the requested tag/SHA does not (C2). Gated on the checkout
+	// phase so a missing/private repo with --pin stays a NotFound (FIX-3).
+	if req.Pinned && checkoutFailed {
 		return &NoSuchVersionError{
 			Skill: req.Skill,
 			Ref:   req.Ref,
@@ -125,14 +173,30 @@ func classifyFetchError(req FetchRequest, authenticated bool, err error) error {
 		}
 	}
 
-	// Enrich the bare NotFound with the origin/skill identity and whether a token
-	// was presented. GitHub reports "not found" (not 403) for a private repo
-	// reached without a token, so the unauthenticated flag is what lets the CLI
-	// add the "if private, authenticate" hint (D4).
-	return &NotFoundError{
-		Origin:        req.originRef(),
-		Skill:         req.Skill,
-		Authenticated: authenticated,
-		Cause:         gitErr,
+	// FIX-7: ClassifyGitError builds Auth/Unreachable with a blank Origin; rebuild
+	// each with the configured origin identity. NotFound additionally carries the
+	// skill name and the no-token flag for the "if private, authenticate" hint
+	// (D4): GitHub reports "not found" (not 403) for a private repo reached
+	// without a token.
+	var (
+		authErr  *AuthError
+		unreach  *UnreachableError
+		notFound *NotFoundError
+	)
+
+	switch {
+	case errors.As(classified, &authErr):
+		return &AuthError{Origin: req.originRef(), Cause: gitErr}
+	case errors.As(classified, &unreach):
+		return &UnreachableError{Origin: req.originRef(), Cause: gitErr}
+	case errors.As(classified, &notFound):
+		return &NotFoundError{
+			Origin:        req.originRef(),
+			Skill:         req.Skill,
+			Authenticated: authenticated,
+			Cause:         gitErr,
+		}
+	default:
+		return classified
 	}
 }
