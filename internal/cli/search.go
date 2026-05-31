@@ -46,6 +46,10 @@ func newSearchCmd(opts *globalOpts) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "search [QUERY...]",
 		Short: "Discover skills published by your configured origin",
+		// QUERY terms are free-form (a token-AND over name+description+topics), so
+		// any number of positional args is valid — declare it explicitly rather
+		// than leave the args contract unstated.
+		Args: cobra.ArbitraryArgs,
 		Long: "search discovers the skills your configured origin publishes. It resolves the\n" +
 			"active origin (SKILLRIG_ORIGIN > project > global) exactly like every command,\n" +
 			"reads the origin's catalog (index.json), and matches deterministically: a free-text\n" +
@@ -92,9 +96,20 @@ func (sc *searchCmd) run(cmd *cobra.Command) error {
 		return usageNoOriginConfigured()
 	}
 
+	// A git repo is OPTIONAL for search: it only enables the local-checkout
+	// fast-path (reading a remote origin's committed OWNER/REPO checkout off
+	// disk). Outside a repo — or against a remote/file:// origin with no checkout
+	// — repoRoot is left empty and loadCatalog fetches the catalog directly, so
+	// `skillrig search` works from any directory (FIX-7).
 	repoRoot, err := gitToplevel(cmd.Context(), cwd)
 	if err != nil {
-		return usageNotGitRepo(searchNotGitRepoWhy, err)
+		if !errors.Is(err, errNotGitRepo) {
+			// An unexpected failure (e.g. context cancellation) is not a "not a
+			// repo" precondition — surface it rather than silently proceed.
+			return mapSearchError(res.Origin.String(), err)
+		}
+
+		repoRoot = ""
 	}
 
 	catalog, err := loadCatalog(cmd.Context(), repoRoot, res.Origin)
@@ -146,9 +161,11 @@ func loadCatalog(ctx context.Context, repoRoot string, origin config.Origin) (sk
 // localCatalogPath returns the on-disk index.json path to read when the origin's
 // catalog is available locally (no transport), and false when it must be
 // fetched. A bare-path LOCAL origin (a filesystem path, not a file:// URL) reads
-// <path>/index.json directly; a remote OWNER/REPO reads its 002 local checkout at
-// <repo-root>/OWNER/REPO only when that directory exists. A file:// origin and a
-// checkout-less remote both return false so the caller fetches.
+// <path>/index.json directly (independent of repoRoot); a remote OWNER/REPO reads
+// its 002 local checkout at <repo-root>/OWNER/REPO only when there IS a repo root
+// and that directory exists. A file:// origin, a checkout-less remote, and the
+// no-repo case (empty repoRoot, e.g. search run outside a git repo) all return
+// false so the caller fetches (FIX-7).
 func localCatalogPath(repoRoot string, origin config.Origin) (string, bool) {
 	if origin.IsLocal() {
 		if strings.HasPrefix(origin.Path, "file://") {
@@ -156,6 +173,12 @@ func localCatalogPath(repoRoot string, origin config.Origin) (string, bool) {
 		}
 
 		return filepath.Join(origin.Path, catalogName), true
+	}
+
+	// The remote local-checkout fast-path is anchored at the repo root; with no
+	// repo (empty root) there is no checkout to read, so fetch.
+	if repoRoot == "" {
+		return "", false
 	}
 
 	originDir, _ := originDirRef(origin)
@@ -184,10 +207,6 @@ func readCatalogFile(catalogPath string) (skillcore.Catalog, error) {
 
 	return catalog, nil
 }
-
-// searchNotGitRepoWhy is the rationale for search's not-a-repo error: the origin
-// catalog is read from a checkout anchored at the repo root.
-const searchNotGitRepoWhy = "the origin catalog is read from a checkout anchored at the repo root"
 
 // catalogReadError marks the origin's catalog as unreadable (absent or no
 // permission). It is presentation-free here only in that mapSearchError renders

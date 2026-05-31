@@ -87,8 +87,9 @@ func (opts AddOptions) isRemote() bool {
 
 // cloneURL derives the git transport target for the remote-fetch form: an
 // explicit RepoURL (the file:// origin) when set, else the GitHub HTTPS URL for
-// OWNER/REPO. The token is never embedded here — git.go injects it via
-// http.extraHeader — so the URL is safe to surface in diagnostics.
+// OWNER/REPO. The token is never embedded here — git.go injects it via the
+// GIT_CONFIG http.extraHeader env (kept out of argv) — so the URL is safe to
+// surface in diagnostics.
 func (opts AddOptions) cloneURL() string {
 	if opts.RepoURL != "" {
 		return opts.RepoURL

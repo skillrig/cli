@@ -118,8 +118,8 @@ func FetchSkill(ctx context.Context, req FetchRequest) (FetchResult, error) {
 // RepoURL (the LOCAL origin's file://<path>, or any caller-supplied URL) when
 // set, else the GitHub HTTPS URL for OWNER/REPO (FIX-1 — the seam that stops
 // hardcoding github.com so a file:// origin is fetchable). The token is never
-// embedded here — git.go injects it via http.extraHeader (research D4) — so the
-// URL is safe to surface in diagnostics.
+// embedded here — git.go injects it via the GIT_CONFIG http.extraHeader env, kept
+// out of argv (research D4) — so the URL is safe to surface in diagnostics.
 func (r FetchRequest) cloneURL() string {
 	if r.RepoURL != "" {
 		return r.RepoURL

@@ -124,8 +124,9 @@ type searchResultJSON struct {
 }
 
 // searchDescWidth is the human-output truncation width for a skill's one-line
-// description (cli.md Principle 3: compact human output, complete --json).
-const searchDescWidth = 60
+// description (cli.md Principle 3: compact human output ~80 chars, complete
+// --json).
+const searchDescWidth = 80
 
 // renderSearchResult writes a search outcome to w. With jsonOut it emits one
 // complete JSON object (origin + every matching skill, all fields, [] not null

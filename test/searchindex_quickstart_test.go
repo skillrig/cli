@@ -1511,3 +1511,36 @@ func TestQuickstart_SearchRemoteFileOrigin(t *testing.T) {
 
 	requireKeys(t, entry, "name", "version", "namespace", "description", "topics", "path")
 }
+
+// TestQuickstart_SearchRemoteFromNonGitDir (FIX-7) — search needs no git working
+// tree: run from a PLAIN temp dir that is NOT a git repo, against a file:// origin
+// with no local checkout, it fetches index.json over the real git transport and
+// lists the skill; exit 0. A repo is only an optional local-checkout fast-path, so
+// `skillrig search` must work outside one (especially against a remote origin).
+func TestQuickstart_SearchRemoteFromNonGitDir(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+
+	o := newRemoteOrigin(t)
+
+	// A plain temp dir with NO `git init` — search must not require a repo root.
+	nonGitDir := t.TempDir()
+
+	res := run(t, runOpts{
+		args: []string{"search"},
+		cwd:  nonGitDir,
+		env:  map[string]string{"SKILLRIG_ORIGIN": o.cloneURL},
+	})
+	if res.exit != 0 {
+		t.Fatalf("search from a non-git dir exit = %d, want 0 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	// It lists the skill the file:// origin publishes (fetched, no local checkout).
+	if !strings.Contains(res.stdout, sampleSkill) {
+		t.Errorf("search from a non-git dir omits %q:\n%s", sampleSkill, res.stdout)
+	}
+
+	if !strings.Contains(res.stdout, "skillrig add") {
+		t.Errorf("search listing missing the add footer hint:\n%s", res.stdout)
+	}
+}

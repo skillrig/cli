@@ -28,13 +28,37 @@ func newGitClient() *gitClient {
 
 // run invokes git with args, capturing stdout and stderr into buffers. On a
 // non-zero exit it returns a *GitError carrying the exit code and trimmed
-// stderr; on success it returns the trimmed stdout.
+// stderr; on success it returns the trimmed stdout. It inherits the parent
+// environment unchanged (no credential injection — see runEnv for that).
 func (c *gitClient) run(ctx context.Context, args ...string) (string, error) {
+	return c.runEnv(ctx, nil, args...)
+}
+
+// runEnv is run with extra environment variables. When env is non-empty it is
+// appended to the parent environment — the seam that injects a GitHub credential
+// via git's GIT_CONFIG_* vars (authConfigEnv) so the token lands in the process
+// ENVIRON, never argv (gh-cli keeps the token out of argv too; a `-c
+// http.extraHeader=...` flag would be visible in `ps`). When env is empty cmd.Env
+// is left as the command context set it (nil in production → the child inherits
+// the parent env unchanged).
+//
+// The base for the append is any cmd.Env the command context already populated,
+// falling back to os.Environ() when it left it nil; this both yields the real
+// parent env in production AND preserves an env the test seam pre-set on the cmd.
+func (c *gitClient) runEnv(ctx context.Context, env []string, args ...string) (string, error) {
 	var stdout, stderr bytes.Buffer
 
 	cmd := c.commandContext(ctx, "git", args...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+
+	if len(env) > 0 {
+		if cmd.Env == nil {
+			cmd.Env = os.Environ()
+		}
+
+		cmd.Env = append(cmd.Env, env...)
+	}
 
 	if err := cmd.Run(); err != nil {
 		// A non-zero git exit surfaces as *exec.ExitError carrying the code;
@@ -87,13 +111,14 @@ func (c *gitClient) statusPorcelain(gitDir, relPath string) (string, error) {
 	)
 }
 
-// authConfigArgs returns the global `-c http.extraHeader=...` git arguments that
-// inject token as an HTTP Basic credential. The token never appears in the clone
-// URL or process URL — only in a config value passed via `-c` — mirroring gh's
-// transport (research D4). An empty token yields no args (unauthenticated fetch).
-//
-// These are GLOBAL flags, so callers MUST place them before the git subcommand.
-func authConfigArgs(token string) []string {
+// authConfigEnv returns the GIT_CONFIG_* environment variables (git >=2.31) that
+// inject token as an HTTP Basic http.extraHeader credential. Passing the config
+// through the ENVIRON — not a `-c http.extraHeader=...` argv flag — keeps the
+// base64 credential out of the process argv (where `ps` would expose it); gh-cli
+// keeps its token out of argv for the same reason (research D4). The token never
+// appears in the clone URL either. An empty token yields no env (unauthenticated
+// fetch). Callers thread the result to runEnv.
+func authConfigEnv(token string) []string {
 	if token == "" {
 		return []string{}
 	}
@@ -102,7 +127,13 @@ func authConfigArgs(token string) []string {
 	// conventional "x-access-token" username matches gh's own header.
 	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
 
-	return []string{"-c", "http.extraHeader=Authorization: Basic " + basic}
+	// GIT_CONFIG_COUNT=N with GIT_CONFIG_KEY_i/GIT_CONFIG_VALUE_i pairs is git's
+	// environment form of `-c <key>=<value>` — the value never reaches argv.
+	return []string{
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=http.extraHeader",
+		"GIT_CONFIG_VALUE_0=Authorization: Basic " + basic,
+	}
 }
 
 // Clone runs a partial, sparse, no-checkout clone of repoURL into destDir,
@@ -118,9 +149,9 @@ func (c *gitClient) Clone(ctx context.Context, repoURL, destDir, token string) e
 		}
 	}
 
-	args := authConfigArgs(token)
-	args = append(
-		args,
+	_, err := c.runEnv(
+		ctx,
+		authConfigEnv(token),
 		"clone",
 		"--filter=blob:none",
 		"--sparse",
@@ -130,8 +161,6 @@ func (c *gitClient) Clone(ctx context.Context, repoURL, destDir, token string) e
 		destDir,
 	)
 
-	_, err := c.run(ctx, args...)
-
 	return err
 }
 
@@ -139,7 +168,8 @@ func (c *gitClient) Clone(ctx context.Context, repoURL, destDir, token string) e
 // fresh temp dir and returns that dir. It clones (partial + sparse + no-checkout)
 // into the temp dir, narrows the sparse cone to skillPath, then checks out ref —
 // so only that subtree materializes on disk. token is injected per git
-// invocation via -c http.extraHeader when non-empty (research D4/D7).
+// invocation via the GIT_CONFIG http.extraHeader env (kept out of argv) when
+// non-empty (research D4/D7).
 //
 // The returned dir is the caller's to remove. On any git failure the temp dir is
 // cleaned up and a *GitError is returned (the stub seam classifies exit/stderr).
@@ -199,12 +229,11 @@ func (c *gitClient) fetchSparseInto(
 		return &fetchStepError{step: stepClone, err: err}
 	}
 
-	auth := authConfigArgs(token)
+	// The token rides in the GIT_CONFIG env (kept out of argv), threaded to each
+	// authenticated invocation via runEnv.
+	auth := authConfigEnv(token)
 
-	sparseArgs := append([]string{}, auth...)
-	sparseArgs = append(sparseArgs, "-C", dir, "sparse-checkout", "set", "--", skillPath)
-
-	if _, err := c.run(ctx, sparseArgs...); err != nil {
+	if _, err := c.runEnv(ctx, auth, "-C", dir, "sparse-checkout", "set", "--", skillPath); err != nil {
 		return &fetchStepError{step: stepClone, err: err}
 	}
 
@@ -212,14 +241,9 @@ func (c *gitClient) fetchSparseInto(
 	// already a fetched tip (branch/tag), this fetch fails harmlessly; only the
 	// checkout below is authoritative for ref existence, so a fetch failure is
 	// classified with the clone phase, never as a missing version.
-	fetchArgs := append([]string{}, auth...)
-	fetchArgs = append(fetchArgs, "-C", dir, "fetch", "--depth", "1", "origin", ref)
-	_, _ = c.run(ctx, fetchArgs...)
+	_, _ = c.runEnv(ctx, auth, "-C", dir, "fetch", "--depth", "1", "origin", ref)
 
-	checkoutArgs := append([]string{}, auth...)
-	checkoutArgs = append(checkoutArgs, "-C", dir, "checkout", ref)
-
-	if _, err := c.run(ctx, checkoutArgs...); err != nil {
+	if _, err := c.runEnv(ctx, auth, "-C", dir, "checkout", ref); err != nil {
 		return &fetchStepError{step: stepCheckout, err: err}
 	}
 
@@ -251,7 +275,8 @@ func (e *fetchStepError) Unwrap() error { return e.err }
 // without materializing a working tree: it clones partial + no-checkout into a
 // fresh temp dir, then `git show <ref>:<file>` streams the blob (the partial
 // clone fetches just that object on demand). token is injected per invocation via
-// -c http.extraHeader when non-empty (research D4/D7). It is the catalog fetch's
+// the GIT_CONFIG http.extraHeader env (kept out of argv) when non-empty (research
+// D4/D7). It is the catalog fetch's
 // transport (FetchCatalog) — one git transport for both the skill subtree and
 // index.json. The temp dir is removed before returning; only the bytes survive.
 func (c *gitClient) FetchFile(
@@ -283,12 +308,8 @@ func (c *gitClient) FetchFile(
 		return nil, &fetchStepError{step: stepClone, err: err}
 	}
 
-	auth := authConfigArgs(token)
-
-	showArgs := append([]string{}, auth...)
-	showArgs = append(showArgs, "-C", tmpDir, "show", ref+":"+file)
-
-	out, err := c.run(ctx, showArgs...)
+	// The token rides in the GIT_CONFIG env (kept out of argv), not a `-c` flag.
+	out, err := c.runEnv(ctx, authConfigEnv(token), "-C", tmpDir, "show", ref+":"+file)
 	if err != nil {
 		return nil, &fetchStepError{step: stepCheckout, err: err}
 	}
