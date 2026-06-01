@@ -42,6 +42,16 @@ jobs:
             exit 1
           fi
 
+      - name: go mod tidy (must be clean)
+        # The release build does NOT run `go mod tidy` (it must build the tag
+        # verbatim), so tidiness is enforced here instead.
+        run: |
+          go mod tidy
+          if ! git diff --exit-code go.mod go.sum; then
+            echo "::error::go mod tidy changed go.mod/go.sum — run 'go mod tidy' and commit the result"
+            exit 1
+          fi
+
       - name: go vet
         run: go vet ./...
 

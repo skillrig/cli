@@ -10,9 +10,10 @@ version: 2
 
 project_name: skillrig
 
-before:
-  hooks:
-    - go mod tidy
+# No `before.hooks: go mod tidy` — a release must build EXACTLY the tagged
+# source. Mutating go.mod/go.sum at release time would yield artifacts that
+# don't match the tag. Module tidiness is enforced as a CI gate instead
+# (the "go mod tidy (must be clean)" step in .github/workflows/ci.yml).
 
 builds:
   - id: skillrig
@@ -22,12 +23,13 @@ builds:
       - CGO_ENABLED=0 # static binary, no libc linkage
     flags:
       - -trimpath
-    # Inject build metadata into main.{version,commit,date} (see main.go).
+    # Inject build metadata into internal/cli's package vars (main stays a
+    # thin shim, so the vars live in internal/cli — see root.go).
     ldflags:
       - -s -w
-      - -X main.version={{ .Version }}
-      - -X main.commit={{ .Commit }}
-      - -X main.date={{ .Date }}
+      - -X github.com/skillrig/cli/internal/cli.version={{ .Version }}
+      - -X github.com/skillrig/cli/internal/cli.commit={{ .Commit }}
+      - -X github.com/skillrig/cli/internal/cli.date={{ .Date }}
     # Windows is intentionally NOT built: it is not validated in e2e.
     goos:
       - linux
