@@ -22,3 +22,6 @@ qodo-auth.key
 
 # GoReleaser output
 /dist/
+
+# Skill eval results (generated output; the eval-set inputs stay tracked)
+.agents/skills/qodo-manage-rules/evals/direct-probe-result.json
