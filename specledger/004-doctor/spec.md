@@ -3,215 +3,282 @@
 **Feature Branch**: `004-doctor`
 **Created**: 2026-05-31
 **Status**: Draft
-**Input**: User description: "doctor — environment health & backing-CLI readiness (roadmap 005 + 006 combined into one slice). A `skillrig doctor` command: the superset, deterministic, offline health check for a consuming repo that answers 'is this repo's vendored-skill setup sound AND is my environment actually ready to run those skills?' — the operational-lifecycle complement to `verify`. doctor is a rules-based engine, designed so more rules can be added later."
+**Input**: User description: "doctor — environment health & backing-CLI readiness (roadmap 005 + 006 combined into one slice). A `skillrig doctor` command that answers 'is this repo's vendored-skill setup sound AND is my environment actually ready to run those skills?' — a developer/agent-facing readiness check, complementary to the CI-focused `verify`. doctor is a rules-based engine, designed so more rules can be added later."
 
 ## Overview
 
 The first three slices made a repo *self-describing about where its skills come from* (001 `init`), made the skills it carries *honest* (002 `add` + `verify`), and let a user *find and acquire* skills from a remote library (003 `search` + remote `add` + `index`). The everyday path is now `init` → `search` → `add` → `verify`.
 
-But a skill is rarely self-contained: it often expects a backing CLI to be installed (e.g. a plan-review skill expects `terraform` and an org-internal tool on PATH). `verify` deliberately does **not** check for those — it validates that vendored *content* is byte-honest, nothing about the surrounding environment. So a repo can pass `verify` and still have an agent fail at runtime because the tool a skill needs isn't installed, is the wrong version, or can't be fetched because the user isn't authenticated to the private repo that hosts it. Today nothing surfaces that gap, and the failure shows up late — at agent-run time or in CI — with no actionable diagnosis.
+But a skill is rarely self-contained: it often expects a backing CLI to be installed (e.g. a plan-review skill expects `terraform` and an org-internal tool on PATH). `verify` deliberately does **not** check for those — it validates that vendored *content* is byte-honest, nothing about the surrounding environment. So a developer or agent can have integrity-clean skills and still fail at run time because the tool a skill needs isn't on PATH, is the wrong version, or lives in a private repo the user can't authenticate to. Today nothing surfaces that gap, and the failure shows up late — at agent-run time — with no actionable diagnosis.
 
-This slice closes that gap with `skillrig doctor`: one **deterministic, offline** health command that answers two questions at once — *is the vendored-skill setup sound* (integrity) and *is my environment actually ready to run those skills* (readiness). It is the operational-lifecycle complement to `verify`: where `verify` is the integrity gate, `doctor` is the "am I ready to work here?" check a developer runs on a fresh checkout and CI runs before letting an agent loose.
+This slice closes that gap with `skillrig doctor`: a **developer/agent-facing readiness check** that answers two questions at once — *is the vendored-skill setup sound* (integrity) and *is my environment actually ready to run these skills* (readiness). `verify` and `doctor` have **different audiences**: `verify` is the **CI integrity gate** (is the committed content exactly what was approved?); `doctor` is the **developer/agent "can I actually use these skills right now, or am I about to install them cleanly?"** check. doctor is a superset in coverage (it includes an integrity rollup) but its purpose and primary caller are the human/agent at the keyboard, not the CI pipeline.
 
-`doctor` is built as a **rules-based engine**: each check is an independent, deterministic rule evaluated over the repo and its vendored skills. This first slice ships a foundational rule set (backing-CLI presence, version constraints, authentication, integrity rollup), and the design must let later slices add rules (allowlist, audit, risk signals) without reworking the core.
+`doctor` is built as a **rules-based engine**: each check is an independent rule evaluated over the repo and its vendored skills. The foundational rule set in this slice is:
 
-This slice combines roadmap items **005** (backing-CLI prerequisites — declare + verify) and **006** (`doctor` superset health check). They ship together because the prerequisite-readiness logic has no command home *except* `doctor`: `verify` stays integrity-only by design (it must remain a pure content gate). `doctor` is also where the long-reserved **exit code 3 (prerequisite failure)** finally lands.
+- **`path-presence`** (always runs) — is each required tool resolvable on PATH?
+- **`mise-version-check`** (runs when a `mise.toml` is present at repo root) — does the tool's declared version constraint hold against the `mise.toml` pin?
+- **`source-auth-reachability`** (runs for requirements whose source is a concrete GitHub repo; online by default) — can the source repo and its release assets be reached with current authentication?
+- **`integrity`** (always runs) — the existing label-honesty + orphan check, rolled up from `verify`.
+
+`path-presence` and the mise rules are **separate rules that both run** — there is **no PATH→mise fallback** (a mise shim may not have reached the agent's environment even when `mise.toml` lists the tool, so PATH must be checked on its own). The engine is designed so later slices add rules (allowlist, audit, risk signals, default-branch) by adding a rule, without reworking the core — and this slice exposes that extensibility as a first-class, tested developer outcome.
+
+doctor runs **online by default** (so it can answer reachability/auth questions a developer actually cares about); local rules are deterministic and a `--offline` flag (or an unreachable network) degrades the online rules to an honest advisory rather than failing. This slice combines roadmap items **005** (backing-CLI prerequisites — declare + verify) and **006** (`doctor`). They ship together because the prerequisite-readiness logic has no command home *except* `doctor` (and `add`); `verify` stays integrity-only by design. `doctor` is also where the long-reserved **exit code 3 (prerequisite failure)** finally lands.
 
 ## Clarifications
 
-The targeting decisions below were resolved interactively before specification and are treated as firm:
-
 ### Session 2026-05-31
 
-- **Q: When a tool is present but its version cannot be deterministically verified (no declarative version source)?** → **PASS with an advisory note.** The tool counts as eligible (does not fail the run); doctor emits an honest "version unverified (no declarative source)" advisory but never guesses by parsing tool output.
-- **Q: How does doctor learn a tool's declared version for a constraint check?** → **Read the consumer repo's `mise.toml` `[tools]` pins as data, offline** (no subprocess, no probing the tool itself). "Resolvable via mise" means "listed there."
-- **Q: Slice boundary for 005 + 006?** → **One combined `doctor` slice.** The prerequisite-checking logic and the `doctor` command surface ship together.
-- **Q: What does doctor check in this first slice?** → All four foundational rules: backing-CLI prerequisites, version constraints, authentication-as-distinct-failure, and an integrity rollup; with mise resolvability folded into presence/version checking.
-- **Q: How deep is version-constraint matching?** → Evaluated **only against a declared version source** (the `mise.toml` pin); doctor never executes a tool to discover its version (constitution N6 — no inferential truth).
+Initial targeting (pre-specification):
+
+- **Q: How does doctor learn a tool's declared version for a constraint check?** → **Read the consumer repo's `mise.toml` `[tools]` pins as data** (no subprocess, no probing the tool itself). The version check is the `mise-version-check` rule, gated on a `mise.toml` being present.
+- **Q: How deep is version-constraint matching?** → Evaluated **only against the `mise.toml` pin**; doctor never executes a tool to discover its version (constitution N6 — no inferential truth). A non-concrete pin (e.g. `latest`, `ref:…`) passes the rule **with a warning** (no pin means the actual installed version can't be guaranteed to match the constraint).
+- **Q: Slice boundary for 005 + 006?** → **One combined slice** delivering the `doctor` command and the readiness rules.
+
+Comment-driven clarifications (reviewer comments on this spec):
+
+- **Q: Must doctor be offline/deterministic? (comments a1600392, 9d60641f)** → **No — online by default, `--offline` skips network rules.** Local rules (`path-presence`, `mise-version-check`, `integrity`) are deterministic and always available; online rules (`source-auth-reachability`) run by default and degrade to an advisory "unverified (offline / unreachable)" note under `--offline` or when the network is unreachable. The blanket "deterministic offline" framing is dropped (it contradicted the auth-fetch story).
+- **Q: Is standalone `doctor` the only entry point? (comment 6566d72b)** → **No.** `skillrig add` also runs the readiness rules on the just-vendored skill and prints a concise notice when required binaries are missing; when a `mise.toml` is present it adds a "try installing via mise" footnote (a hint only — actual install is left to a mise-specific skill / the org's mise workflow).
+- **Q: When does the auth/reachability rule apply? (comment 5c587452)** → **Only when a requirement is concretely identifiable as served from a GitHub repo** (a parseable `owner/repo` source). Then doctor probes repo + release-asset readability under current auth. For opaque sources (or `manager: mise` with no GitHub-repo source — the mise backend is mise-specific and not skillrig's to interpret) the rule reports **N/A**, never a false failure.
+- **Q: PATH vs mise — fallback or separate rules? (comment 083ad9ff)** → **Separate rules; both always run; no fallback.** When `mise.toml` lists a tool but the PATH lookup fails, `path-presence` reports a **prerequisite failure (exit 3)** — a mise shim that hasn't reached the environment means the tool is not actually runnable, and that must surface, not be masked by the mise declaration.
+- **Q: doctor vs verify positioning? (comment 1f106cf5)** → **Different audiences.** `verify` = CI-focused integrity gate; `doctor` = developer/agent-focused readiness ("everything's fine to use the available skills, or to install a new one cleanly"). doctor rolls integrity in but is not "verify-for-CI."
+- **Q: Is rule-engine extensibility a user story? (comment a1600392)** → **Yes** — add an explicit developer-extensibility user story (a contributor adds a new rule by implementing one rule interface + registering it, with a test pattern), so easy rule-addition is a tracked, demonstrable outcome rather than only an internal design note.
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 — Diagnose backing-CLI readiness on a fresh checkout (Priority: P1)
+### User Story 1 — "Can I actually use these skills?" backing-CLI presence (Priority: P1)
 
-A developer (or an agent, or CI) clones a repo that has vendored skills and wants to know, before doing any work, whether the environment can actually run those skills. They run `skillrig doctor`. The command inspects every vendored skill's declared requirements and reports, per skill and per required tool, whether each tool is present and ready — partitioning skills into **eligible** (every requirement satisfied) and **ineligible** (something missing), each ineligible item carrying a specific, actionable reason. The command exits non-zero when something is genuinely missing, so CI can gate on it.
+A developer or agent working in a repo that carries vendored skills wants to know, before relying on them, whether the environment can actually run them. They run `skillrig doctor`. The command inspects every vendored skill's declared requirements and reports, per skill and per required tool, whether each tool is **present on PATH** — partitioning skills into **eligible** (every requirement satisfied) and **ineligible** (something unmet), each ineligible item carrying a specific, actionable reason. A tool missing from PATH is a prerequisite failure with a non-zero exit, even if it is declared in `mise.toml` (a mise shim may not have reached this environment — see US3).
 
-**Why this priority**: This is the core value of the slice and the smallest standalone MVP. Without it, a repo can pass `verify` and still be unrunnable, and the failure surfaces late and undiagnosed. A single command that turns "the agent mysteriously failed" into "tool X required by skill Y is not installed — here is how to fix it" is the whole point.
+**Why this priority**: This is the core value and smallest standalone MVP. It turns "the agent mysteriously failed" into "tool X required by skill Y is not on PATH — here is how to fix it." Without it, integrity-clean skills can still be unrunnable with no diagnosis.
 
-**Independent Test**: In a repo with one vendored skill that requires a tool, run `doctor` with the tool absent from PATH (ineligible, actionable reason, non-zero exit) and again with it present (eligible, exit 0). Fully testable on its own; delivers immediate value.
+**Independent Test**: In a repo with one vendored skill that requires a tool, run `doctor` with the tool absent from PATH (ineligible, actionable reason, exit 3) and again with it present (eligible, exit 0).
 
 **Acceptance Scenarios**:
 
-1. **Given** a repo with a vendored skill that declares a required tool, **and** that tool is on PATH, **When** the user runs `skillrig doctor`, **Then** the skill is reported eligible and the command exits 0.
-2. **Given** the same repo **but** the required tool is absent from PATH and not declared in any version source, **When** the user runs `skillrig doctor`, **Then** the skill is reported ineligible with a reason naming the missing tool and the skill that needs it, and the command exits with the prerequisite-failure code.
-3. **Given** a repo with multiple vendored skills with varied requirements, **When** the user runs `skillrig doctor`, **Then** the output partitions skills into eligible and ineligible sets, each ineligible entry stating which specific requirement failed and why.
-4. **Given** a repo with vendored skills that declare **no** requirements, **When** the user runs `skillrig doctor`, **Then** every skill is reported eligible and the command exits 0.
+1. **Given** a vendored skill that requires a tool, **and** the tool is on PATH, **When** the user runs `skillrig doctor`, **Then** the skill is eligible and the command exits 0.
+2. **Given** the same repo **but** the tool is absent from PATH, **When** the user runs `skillrig doctor`, **Then** the skill is ineligible with a reason naming the missing tool and the skill that needs it, and the command exits 3.
+3. **Given** multiple vendored skills with varied requirements, **When** the user runs `skillrig doctor`, **Then** the output partitions skills into eligible/ineligible sets, each ineligible entry stating which requirement failed and why.
+4. **Given** vendored skills that declare **no** requirements, **When** the user runs `skillrig doctor`, **Then** every skill is eligible and the command exits 0.
 
 ---
 
-### User Story 2 — Distinguish "tool missing" from "can't authenticate to fetch it" (Priority: P1)
+### User Story 2 — Readiness notice when vendoring a new skill (`add`) (Priority: P2)
 
-A developer is onboarding to a repo whose skills require an **org-internal** backing CLI — one hosted in a private repository. The tool isn't installed yet, and fetching it requires authentication. When they run `skillrig doctor`, the command must not lump "you need to install this" together with "you can't even reach the place it lives." If the requirement points at a private source and the user's GitHub authentication is not reachable, `doctor` reports that as its **own distinct, actionable failure** — separate from a plain "tool missing" and separate from "unreachable/not-found."
+A developer or agent runs `skillrig add <skill>` to vendor a new skill from the origin. Immediately after the skill lands, `skillrig add` runs the readiness rules over the **just-vendored skill** and, if any required binary is missing, prints a concise notice ("`<skill>` requires `<tool>`, which is not on PATH"). When a `mise.toml` is present at repo root, the notice adds a hint that the tool may be installable via mise — a pointer only; performing the install is left to a mise-specific skill or the org's mise workflow. The notice is informational and does **not** fail the `add` (the skill is vendored successfully regardless).
 
-**Why this priority**: Authentication-versus-missing is the single most common onboarding and CI footgun for private backing CLIs (architecture R18). Conflating the two sends people down the wrong fix path (reinstalling a tool they can't fetch instead of fixing their token). Surfacing it loudly and separately is high-value and inseparable from the prerequisite check, so it ships in the same MVP.
+**Why this priority**: Vendoring is the moment a new requirement enters the repo, so it's the most natural point to surface a missing prerequisite — the developer learns immediately, not later at run time. It reuses doctor's engine, so it's additive once the rules exist.
 
-**Independent Test**: In a repo with a skill whose requirement names a private source, run `doctor` with authentication unavailable (distinct "authentication unreachable" failure, its own actionable message) and again with authentication available (the requirement is no longer flagged on auth grounds). The authentication probe is exercised through a stubbed seam — no network.
+**Independent Test**: `add` a skill that requires an absent tool; assert a readiness notice naming the tool appears (and a mise hint when `mise.toml` exists), while `add` still succeeds. Repeat with the tool present; assert no notice.
 
 **Acceptance Scenarios**:
 
-1. **Given** a vendored skill whose requirement names a private (org-internal) source, **and** GitHub authentication is not reachable, **When** the user runs `skillrig doctor`, **Then** the requirement is reported as an authentication failure that is explicitly distinct from "tool missing," names the tool and source, and tells the user how to authenticate, **and** the command exits with the prerequisite-failure code.
-2. **Given** the same skill **but** authentication is reachable, **When** the user runs `skillrig doctor`, **Then** the requirement is not flagged on authentication grounds (only presence/version rules apply).
-3. **Given** a vendored skill whose requirement names a **public** (external) source, **When** the user runs `skillrig doctor`, **Then** no authentication check is applied to that requirement.
+1. **Given** an origin skill that requires a tool not on PATH, **When** the user runs `skillrig add <skill>`, **Then** the skill is vendored successfully **and** a readiness notice names the missing tool and the skill that needs it.
+2. **Given** the same, **and** a `mise.toml` exists at repo root, **When** the user runs `skillrig add <skill>`, **Then** the notice additionally hints that the tool may be installable via mise.
+3. **Given** an origin skill whose required tools are all present, **When** the user runs `skillrig add <skill>`, **Then** no readiness notice is printed and `add` behaves exactly as before.
 
 ---
 
-### User Story 3 — Verify version constraints only where they can be trusted (Priority: P2)
+### User Story 3 — Version constraints via mise, separate from PATH (Priority: P2)
 
-A skill declares that it needs a tool at a minimum version. The developer wants to know whether their environment satisfies that constraint — but only if `doctor` can determine the answer *deterministically*. When the repo declares the tool's version in a recognized version source (a `mise.toml` pin), `doctor` evaluates the constraint against that declared version and fails the run if it's violated. When there is no declarative version source, `doctor` does **not** guess by inspecting the tool: it reports the tool as present with an advisory that the version is unverified, and the run still passes.
+A skill declares it needs a tool at a minimum version. Independently of the PATH-presence check (US1), when a `mise.toml` is present at repo root the `mise-version-check` rule evaluates the skill's version constraint against the tool's `mise.toml` pin. A pin that violates the constraint is a prerequisite failure. A non-concrete pin (`latest`, `ref:…`, etc.) cannot guarantee the installed version matches, so the rule **passes with a warning**. The PATH-presence and mise rules are separate and both run: a tool listed in `mise.toml` but absent from PATH still fails US1's presence check (the shim may not have reached this environment).
 
-**Why this priority**: Version mismatches are a real readiness failure, but trustworthy version checking depends on a declarative source. Honest "unverified" beats a fragile guess (constitution N6). It builds on US1's presence check and is valuable but secondary to "is the tool even there."
+**Why this priority**: Version mismatches are a real readiness failure, and `mise.toml` is the only trustworthy declarative version source (constitution N6). It builds on US1's presence rule.
 
-**Independent Test**: In a repo whose skill requires `tool >= X`, run `doctor` three ways: (a) a `mise.toml` pin satisfies the constraint → eligible, exit 0; (b) a `mise.toml` pin violates the constraint → ineligible with a constraint-violation reason, prerequisite-failure exit; (c) no version source, tool on PATH → eligible with a "version unverified" advisory, exit 0.
+**Independent Test**: In a repo with `mise.toml`, run `doctor` for a skill requiring `tool >= X`: (a) pin satisfies → eligible, exit 0; (b) pin violates → ineligible, exit 3, reason cites declared pin + required constraint; (c) pin is `latest` → pass with a warning, exit 0; (d) tool in `mise.toml` but not on PATH → exit 3 on the presence rule.
 
 **Acceptance Scenarios**:
 
-1. **Given** a skill requiring a tool at a minimum version **and** a `mise.toml` pin that satisfies it, **When** the user runs `skillrig doctor`, **Then** the requirement passes and the command exits 0.
-2. **Given** a skill requiring a tool at a minimum version **and** a `mise.toml` pin that violates it, **When** the user runs `skillrig doctor`, **Then** the requirement fails with a reason stating the declared version, the required constraint, and the skill that needs it, **and** the command exits with the prerequisite-failure code.
-3. **Given** a skill requiring a tool at a minimum version **and** no declarative version source, **but** the tool is present, **When** the user runs `skillrig doctor`, **Then** the requirement passes with an advisory that the version is unverified, **and** the command exits 0.
-4. **Given** a tool that is declared in `mise.toml` but not on PATH, **When** the user runs `skillrig doctor`, **Then** the tool counts as present (resolvable via the declared source) for the presence rule.
+1. **Given** a skill requiring a minimum version **and** a satisfying `mise.toml` pin, **When** `skillrig doctor` runs, **Then** the version rule passes and (if PATH-present) the skill is eligible, exit 0.
+2. **Given** a skill requiring a minimum version **and** a violating `mise.toml` pin, **When** `skillrig doctor` runs, **Then** the version rule fails with a reason citing the declared pin, the required constraint, and the skill, and the command exits 3.
+3. **Given** a skill requiring a minimum version **and** a non-concrete `mise.toml` pin (e.g. `latest`), **When** `skillrig doctor` runs, **Then** the version rule passes with a warning that the version is unverified, exit 0.
+4. **Given** no `mise.toml` at repo root, **When** `skillrig doctor` runs, **Then** the `mise-version-check` rule does not run for any tool (only `path-presence` applies to version-bearing requirements), and version is reported as unverified-advisory.
+5. **Given** a tool declared in `mise.toml` but absent from PATH, **When** `skillrig doctor` runs, **Then** the command exits 3 on the `path-presence` rule (no fallback to the mise declaration).
 
 ---
 
-### User Story 4 — One health command that also covers integrity (Priority: P2)
+### User Story 4 — Authentication to a backing CLI's GitHub source as a distinct failure (Priority: P2)
 
-A developer wants a single "is everything OK here?" command rather than running `verify` and a separate readiness check. `skillrig doctor` rolls the existing integrity check (the same one `verify` performs) into its report: it reports whether vendored skills are byte-honest and free of orphans, alongside the readiness findings. The integrity result and the readiness result are both reflected in the report and in the exit code.
+A repo's skill requires an org-internal backing CLI whose source is a **concrete GitHub repo** (`owner/repo`). When `skillrig doctor` runs online (the default), the `source-auth-reachability` rule probes whether that repo and its release assets are reachable under the current authentication, and reports an **authentication failure** as a class **distinct** from "tool missing" and from "repo unreachable/not-found." The rule applies **only** to requirements with a parseable GitHub-repo source; for opaque sources (including `manager: mise` with no GitHub-repo source — the mise backend is mise-specific) it reports **N/A**. Under `--offline` or when the network is unreachable, the rule degrades to an advisory "reachability unverified (offline)" note rather than a failure.
 
-**Why this priority**: Makes `doctor` the genuine "superset health check" the roadmap describes and gives users one command to trust. It depends on the readiness rules existing first, so it's P2 — but it reuses the already-shipped integrity primitive, so it's low-cost.
+**Why this priority**: Authentication-versus-missing is the top onboarding footgun for private backing CLIs (architecture R18); conflating them sends people down the wrong fix path. It is scoped narrowly (probeable GitHub sources only) to avoid false verdicts on sources skillrig can't interpret.
 
-**Independent Test**: In a repo with a tampered (or orphaned) vendored skill, run `doctor`; the integrity problem appears in the report and drives the integrity-failure exit code, while readiness findings are reported alongside. In a clean, ready repo, `doctor` reports both integrity-OK and readiness-OK and exits 0.
+**Independent Test**: For a requirement whose source is a GitHub repo, run `doctor` online with auth unavailable (distinct auth failure, exit 3) and with auth available (rule passes). Run with `--offline` (advisory, not a failure). For an opaque-source requirement, assert the rule is N/A. The probe is exercised through the existing exec-stub seam.
 
 **Acceptance Scenarios**:
 
-1. **Given** a repo whose vendored content fails the integrity check (a mismatch or orphan), **When** the user runs `skillrig doctor`, **Then** the integrity problem is reported and the command exits with the integrity-failure code.
-2. **Given** a repo that is both integrity-clean and fully ready, **When** the user runs `skillrig doctor`, **Then** the report shows integrity-OK and readiness-OK and the command exits 0.
-3. **Given** a repo that is integrity-clean but has a missing required tool, **When** the user runs `skillrig doctor`, **Then** both facts are reported and the exit code reflects the prerequisite failure per the defined precedence.
+1. **Given** a requirement whose source is a concrete GitHub repo **and** authentication is unavailable, **When** `skillrig doctor` runs online, **Then** the rule reports an authentication failure distinct from "tool missing" and "unreachable," names the tool and source, tells the user how to authenticate, and the command exits 3.
+2. **Given** the same **but** authentication is available, **When** `skillrig doctor` runs online, **Then** the rule passes (no auth-related failure for that requirement).
+3. **Given** a requirement whose source is opaque or not a GitHub repo, **When** `skillrig doctor` runs, **Then** the rule reports N/A for that requirement (no auth check).
+4. **Given** `--offline` (or an unreachable network), **When** `skillrig doctor` runs, **Then** `source-auth-reachability` is reported as an advisory "unverified (offline)" note and does not by itself cause a non-zero exit.
 
 ---
 
-### User Story 5 — Machine-readable health for agents and CI (Priority: P3)
+### User Story 5 — One readiness command that also rolls up integrity (Priority: P2)
 
-An agent or CI pipeline runs `skillrig doctor --json` and consumes a complete, untruncated health report: every skill, every requirement, each rule's verdict and reason, the integrity verdict, and the authentication status. The consumer decides what to extract; nothing is truncated or summarized away. Human output stays compact with a footer hint pointing to `--json`/`--verbose` for the full picture.
+A developer wants a single "is everything OK here for me to work?" command. `skillrig doctor` rolls the existing integrity check (the same label-honesty + orphan detection `verify` performs) into its report alongside the readiness findings. This makes doctor the developer/agent superset; it does not change `verify`, which remains the CI-focused integrity gate.
 
-**Why this priority**: Agents and CI are first-class callers (this is a CLI for humans, agents, and CI alike), and the two-level output contract is a project-wide requirement. It's P3 only because the human path already delivers the core value; the JSON shape is additive and mechanical once the rule results exist.
+**Why this priority**: Gives the developer/agent one trustworthy command. It reuses the already-shipped integrity primitive, so it is low-cost, but depends on the readiness rules existing.
 
-**Independent Test**: Run `doctor --json` against a mixed repo and assert the output is parseable and structurally complete (all skills, all requirements, all rule verdicts, integrity verdict, auth status present); run the human form and assert bounded, compact output with a footer hint.
+**Independent Test**: In a repo with a tampered/orphaned vendored skill, run `doctor`; the integrity problem appears and drives the integrity-failure exit. In a clean, ready repo, doctor reports integrity-OK + readiness-OK and exits 0.
 
 **Acceptance Scenarios**:
 
-1. **Given** any repo state, **When** the user runs `skillrig doctor --json`, **Then** the output is valid, parseable, and contains the complete per-skill/per-requirement rule results, the integrity verdict, and the authentication status, with no truncation.
-2. **Given** any repo state, **When** the user runs `skillrig doctor` (human form), **Then** the output is compact (bounded), groups skills into eligible/ineligible, and ends with a footer hint pointing at the fuller `--json`/`--verbose` views.
-3. **Given** a failing run, **When** the user adds `--verbose`, **Then** the raw underlying causes behind each failure are printed (the escape hatch), and errors go to stderr while report data goes to stdout.
+1. **Given** a repo whose vendored content fails the integrity check, **When** `skillrig doctor` runs, **Then** the integrity problem is reported and the command exits with the integrity-failure code (2).
+2. **Given** a repo that is integrity-clean and fully ready, **When** `skillrig doctor` runs, **Then** the report shows integrity-OK and readiness-OK and the command exits 0.
+3. **Given** a repo that is integrity-clean but has a missing required tool, **When** `skillrig doctor` runs, **Then** both facts are reported and the exit code follows the defined precedence (prerequisite failure wins).
+
+---
+
+### User Story 6 — Machine-readable readiness for agents and CI (Priority: P3)
+
+An agent or CI pipeline runs `skillrig doctor --json` and consumes a complete, untruncated report: every skill, every requirement, each rule's verdict (pass / fail / warning / N/A / advisory) and reason, the integrity verdict, and the network-rule status. Human output stays compact with a footer hint pointing at `--json`/`--verbose`.
+
+**Why this priority**: Agents and CI are first-class callers and the two-level output contract is a project-wide requirement; it's additive once the rule results exist.
+
+**Independent Test**: Run `doctor --json` against a mixed repo and assert the output is parseable and structurally complete (all skills, requirements, rule verdicts, integrity verdict, network-rule status). Run the human form and assert bounded, compact output with a footer hint.
+
+**Acceptance Scenarios**:
+
+1. **Given** any repo state, **When** the user runs `skillrig doctor --json`, **Then** the output is valid, parseable, and contains the complete per-skill/per-requirement rule results, the integrity verdict, and the network-rule status, with no truncation.
+2. **Given** any repo state, **When** the user runs `skillrig doctor` (human form), **Then** the output is compact (bounded), groups skills into eligible/ineligible, and ends with a footer hint pointing at `--json`/`--verbose`.
+3. **Given** a failing run, **When** the user adds `--verbose`, **Then** the raw underlying causes behind each failure are printed; errors go to stderr while report data goes to stdout.
+
+---
+
+### User Story 7 — A contributor adds a new doctor rule (Priority: P3)
+
+A skillrig contributor wants to add a new health rule (e.g. a future allowlist or default-branch check) without touching the engine core or the output rendering. They implement a single rule contract (one function/type producing verdicts with reasons) and register it; the new rule is then evaluated and rendered uniformly with the existing rules, and the contributor can unit-test it in isolation against fact fixtures.
+
+**Why this priority**: The rules engine's whole point is cheap extension; making that a tested, demonstrable outcome (not just an internal note) guards the design against later rules forcing a rewrite. P3 because it's a developer-experience outcome, not an end-user flow.
+
+**Independent Test**: Add a trivial example rule via the rule contract + registration, and assert (a) it appears in `doctor` output and `--json` with verdict + reason, (b) it is unit-testable against a fact fixture without invoking the CLI, and (c) no engine-core or renderer change was required.
+
+**Acceptance Scenarios**:
+
+1. **Given** the rule contract, **When** a contributor implements and registers a new rule, **Then** `doctor` evaluates it and renders its verdict/reason in both human and `--json` output with no change to the engine core or renderer.
+2. **Given** a new rule, **When** the contributor writes a unit test, **Then** the rule can be exercised in isolation over a fact fixture (no CLI invocation, no network).
 
 ---
 
 ### Edge Cases
 
-- **No origin configured / not in a project.** `doctor` is an Environment-pattern command and must still run and report what it can (e.g. integrity over what's on disk, readiness over vendored manifests) rather than hard-failing on a missing origin. A missing origin is reported, not fatal, where the checks don't strictly need it.
+- **No origin configured / not in a project.** `doctor` still runs and reports what it can (integrity over on-disk content, presence/version over vendored manifests); a missing origin is reported, not fatal.
 - **No vendored skills at all.** `doctor` reports a healthy/empty state and exits 0 (idempotent, nothing to check).
-- **A vendored skill declares no requirements.** It is trivially eligible; only the integrity rule applies to it.
-- **A requirement names a tool but no version constraint.** Presence rule applies; version rule is a no-op (not a failure).
-- **A `mise.toml` exists but does not list the required tool.** That tool falls back to the PATH presence check; absence there is a "tool missing," not a version failure.
-- **A `mise.toml` is malformed or unreadable.** Treated as "no declarative version source" for version purposes and recorded as a diagnostic surfaced under `--verbose`; it does not crash the run (consistent with how malformed config is handled elsewhere — skipped, recorded, never fatal).
-- **A requirement's version constraint is itself malformed/unparseable** in the skill manifest. Reported as a requirement-level problem with an actionable message naming the offending skill; it must not silently pass.
-- **Multiple failure classes in one run** (e.g. an integrity mismatch *and* a missing tool). The exit code follows a single deterministic precedence; the report shows all findings regardless of which class wins the exit code.
-- **A requirement names a private source but the source identity is ambiguous/unparseable.** Reported as an actionable requirement-level problem rather than silently skipping the auth check.
-- **Running in an environment with no GitHub auth tooling at all** (no token env vars, no `gh`). For public requirements this is irrelevant; for private requirements it surfaces as the distinct authentication failure (US2), never as a crash.
+- **A vendored skill declares no requirements.** Trivially eligible on readiness; only `integrity` applies.
+- **A requirement names a tool but no version constraint.** `path-presence` applies; `mise-version-check` is a no-op for that tool.
+- **A `mise.toml` is absent.** The `mise-version-check` rule does not run; version-bearing requirements report version as unverified-advisory, and presence is judged on PATH alone.
+- **A `mise.toml` is malformed/unreadable.** Treated as "no usable mise version source," recorded as a diagnostic under `--verbose`; it does not crash the run.
+- **A `mise.toml` pin is non-concrete (`latest`, `ref:…`).** `mise-version-check` passes with a warning (version unverifiable against the constraint).
+- **A tool is in `mise.toml` but not on PATH.** `path-presence` fails (exit 3) — no fallback to the mise declaration.
+- **A requirement's version constraint is malformed** in the manifest. Reported as a requirement-level problem naming the offending skill; must not silently pass.
+- **Network unreachable / `--offline`.** Online rules (`source-auth-reachability`) degrade to advisory "unverified (offline)" notes; local rules and exit codes are unaffected.
+- **A requirement's `source` is not a parseable GitHub repo.** `source-auth-reachability` reports N/A (no false failure).
+- **Multiple failure classes in one run** (integrity mismatch *and* a missing tool). Exit code follows a single documented precedence; the report shows all findings.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-**Command surface & classification**
+**Command surface, audience & engine**
 
-- **FR-001**: The system MUST provide a `skillrig doctor` command that runs a deterministic, offline health check over the current consumer repo and exits with a status code reflecting the outcome.
-- **FR-002**: `doctor` MUST be idempotent and safe to retry (Environment pattern): repeated runs against an unchanged repo produce the same report and exit code, and the command performs no mutations.
-- **FR-003**: `doctor` MUST function without a fully-configured project — it reports what it can (and records what it cannot check) rather than hard-failing on absent configuration such as a missing origin.
-- **FR-004**: `doctor` MUST be implemented as a rules-based engine in which each check is an independent, deterministic rule evaluated over the repo and its vendored skills, structured so that additional rules can be added later without reworking the core or the output contract.
+- **FR-001**: The system MUST provide a `skillrig doctor` command that runs the readiness + integrity rules over the current consumer repo and exits with a status code reflecting the outcome.
+- **FR-002**: `doctor` MUST be idempotent and perform no mutations: repeated runs against an unchanged repo and environment produce the same findings and exit code (subject to genuine environment/network changes for online rules).
+- **FR-003**: `doctor` MUST function without a fully-configured project — it reports what it can and records what it cannot check, rather than hard-failing on absent configuration such as a missing origin.
+- **FR-004**: `doctor` MUST be implemented as a rules-based engine in which each check is an independent rule producing a verdict (pass / fail / warning / advisory / N/A) with an actionable reason, structured so additional rules can be added by adding a rule, without reworking the engine core or the output rendering.
+- **FR-005**: `doctor` is **developer/agent-facing readiness**; `verify` remains the **CI-focused integrity gate**. `doctor` MUST NOT change `verify`'s behavior or scope, and the two MUST be described by audience, not as duplicates.
 
-**Readiness rule: backing-CLI presence (roadmap 005)**
+**Network posture**
 
-- **FR-005**: For every vendored skill, `doctor` MUST read that skill's declared tool requirements from its vendored manifest (the single on-disk source of truth) so the check runs offline.
-- **FR-006**: For each declared requirement, `doctor` MUST determine whether the required tool is **present**, where "present" means available on the executable search path OR declared in a recognized version source in the consumer repo.
-- **FR-007**: `doctor` MUST partition vendored skills into **eligible** (every requirement satisfied) and **ineligible** (one or more requirements unmet), and for each ineligible skill MUST state, per failing requirement, exactly what failed and why, naming the tool and the skill that needs it.
-- **FR-008**: A vendored skill that declares no requirements MUST be treated as eligible by the readiness rules (only integrity applies to it).
+- **FR-006**: `doctor` MUST run **online by default**, executing online rules (reachability/auth) as well as local rules.
+- **FR-007**: Local rules (`path-presence`, `mise-version-check`, `integrity`) MUST be deterministic and fully available without network access.
+- **FR-008**: `doctor` MUST support `--offline`, which skips online rules; under `--offline` (or when the network is genuinely unreachable) online rules MUST degrade to an advisory "unverified (offline)" note and MUST NOT, by themselves, cause a non-zero exit.
 
-**Readiness rule: version constraints (roadmap 005)**
+**Rule: `path-presence` (always runs)**
 
-- **FR-009**: When a requirement declares a version constraint AND a recognized declarative version source provides a version for that tool, `doctor` MUST evaluate the constraint against the declared version and treat a violation as a prerequisite failure with a reason stating the declared version, the required constraint, and the skill that needs it.
-- **FR-010**: `doctor` MUST NOT determine a tool's version by executing the tool or otherwise inferring it from runtime output; version evaluation MUST rely solely on a declarative version source (constitution N6 — no inferential truth).
-- **FR-011**: When a requirement declares a version constraint but no declarative version source provides a version, AND the tool is present, `doctor` MUST report the requirement as satisfied with an advisory that the version is unverified, and MUST NOT fail the run on that basis.
-- **FR-012**: `doctor` MUST read declared tool versions from the consumer repo's `mise.toml` as structured data (offline, no subprocess); a tool listed there counts as both present (FR-006) and version-determinable (FR-009).
-- **FR-013**: A `mise.toml` that is absent, malformed, or unreadable MUST be treated as "no declarative version source" (not a fatal error), with any parse problem recorded as a diagnostic surfaced under `--verbose`.
+- **FR-009**: For every vendored skill, `doctor` MUST read that skill's declared tool requirements from its vendored manifest (the single on-disk source of truth).
+- **FR-010**: For each required tool, `doctor` MUST check whether it is resolvable on PATH and MUST treat a tool absent from PATH as a prerequisite failure (exit 3), naming the tool and the skill that needs it — **independently of any `mise.toml` declaration** (no PATH→mise fallback).
+- **FR-011**: `doctor` MUST partition vendored skills into **eligible** (all rules satisfied) and **ineligible** (one or more rules failed), and for each ineligible skill MUST state, per failing rule, what failed and why. A skill with no requirements is eligible on readiness.
 
-**Readiness rule: authentication as a distinct failure (R18)**
+**Rule: `mise-version-check` (runs when `mise.toml` present at repo root)**
 
-- **FR-014**: For a requirement whose declared source identifies a **private** (org-internal) origin, `doctor` MUST check whether read authentication to that source is reachable, and MUST report an authentication problem as a failure class **distinct** from "tool missing" and from "unreachable/not-found."
-- **FR-015**: An authentication failure MUST be actionable — naming the tool and source and telling the user how to authenticate — and MUST be surfaced prominently (it is the top onboarding/CI footgun).
-- **FR-016**: For a requirement whose declared source is **public/external**, `doctor` MUST NOT apply an authentication check.
-- **FR-017**: The authentication reachability check MUST be deterministic and offline-friendly (it probes local credential availability, not the live remote), so `doctor` remains a no-network command.
+- **FR-012**: When a `mise.toml` exists at repo root, `doctor` MUST read its `[tools]` pins as structured data (no subprocess) and, for each requirement that declares a version constraint, evaluate the constraint against the corresponding pin.
+- **FR-013**: A pin that violates the constraint MUST be a prerequisite failure (exit 3) with a reason citing the declared pin, the required constraint, and the skill.
+- **FR-014**: A non-concrete pin (e.g. `latest`, `ref:…`) MUST cause the rule to pass **with a warning** that the version cannot be verified against the constraint.
+- **FR-015**: `doctor` MUST NOT determine a tool's version by executing the tool or inferring it from runtime output; version evaluation relies solely on the `mise.toml` pin (constitution N6).
+- **FR-016**: When no `mise.toml` is present (or it lacks a pin for the tool), `doctor` MUST report the version as an unverified advisory and MUST NOT fail on version grounds; the `path-presence` rule still applies.
+- **FR-017**: A `mise.toml` that is absent, malformed, or unreadable MUST NOT be fatal; a parse problem is recorded as a diagnostic surfaced under `--verbose`.
 
-**Integrity rollup (roadmap 006 superset)**
+**Rule: `source-auth-reachability` (runs online for GitHub-repo sources)**
 
-- **FR-018**: `doctor` MUST run the existing vendored-content integrity check (label-honesty + orphan detection) and fold its verdict into the health report, using the same shared integrity implementation that `verify` uses (one implementation, never a parallel copy — AP-04).
-- **FR-019**: `verify` MUST remain integrity-only; `doctor` MUST NOT change `verify`'s behavior or scope.
+- **FR-018**: The `source-auth-reachability` rule MUST apply **only** to requirements whose declared source is a parseable GitHub repo (`owner/repo`); for opaque or non-GitHub sources (including `manager: mise` with no GitHub-repo source) it MUST report **N/A** and never a failure.
+- **FR-019**: When applicable and running online, the rule MUST probe whether the source repo and its release assets are reachable under current authentication, and MUST report an **authentication failure** as a class distinct from "tool missing" and from "repo unreachable/not-found."
+- **FR-020**: An authentication failure MUST be actionable — naming the tool and source and telling the user how to authenticate — and MUST be surfaced prominently (top onboarding footgun, architecture R18).
+- **FR-021**: Authentication credentials MUST be resolved via the same mechanism the rest of the CLI uses (token env vars then `gh`), reusing the existing token-resolution path; no new credential surface is introduced.
+
+**Rule: `integrity` (always runs)**
+
+- **FR-022**: `doctor` MUST run the existing vendored-content integrity check (label-honesty + orphan detection) via the **same shared implementation** `verify` uses (one implementation, never a parallel copy — AP-04), and fold its verdict into the report.
+
+**`add`-time readiness notice**
+
+- **FR-023**: After `skillrig add` vendors a skill, it MUST run the readiness rules over the just-vendored skill and print a concise notice when any required binary is missing, naming the tool and the skill.
+- **FR-024**: When a `mise.toml` is present at repo root, the `add` readiness notice MUST add a hint that the missing tool may be installable via mise (a pointer only; skillrig does not perform the install).
+- **FR-025**: The `add` readiness notice MUST be informational only — it MUST NOT change `add`'s exit code or prevent the skill from being vendored.
 
 **Exit codes & precedence**
 
-- **FR-020**: `doctor` MUST use the project exit-code contract: `0` healthy (including advisory-only notes), `1` usage/configuration error, `2` integrity failure, `3` prerequisite failure (a missing required tool, a declared-and-violated version constraint, or an unauthenticated private source).
-- **FR-021**: When more than one failure class is present in a single run, `doctor` MUST select the exit code by a single, documented, deterministic precedence, while the report still shows findings from all classes.
-- **FR-022**: `doctor` MUST be the only command that emits exit code 3; this slice introduces the first real use of the previously-reserved prerequisite-failure code.
+- **FR-026**: `doctor` MUST use the project exit-code contract: `0` healthy (including warnings and advisory notes), `1` usage/configuration error, `2` integrity failure, `3` prerequisite failure (tool missing from PATH, declared-and-violated version constraint, or authentication failure on a probeable GitHub source).
+- **FR-027**: When more than one failure class is present, `doctor` MUST select the exit code by a single documented deterministic precedence (prerequisite `3` over integrity `2` over `0`), while the report still shows findings from all classes.
+- **FR-028**: `doctor` MUST be the only command that emits exit code 3; this slice introduces the first real use of the prerequisite-failure code.
 
 **Output contract (two-level, errors-as-navigation)**
 
-- **FR-023**: `doctor` MUST provide a compact human report that groups skills into eligible/ineligible, summarizes each finding without dumping full detail, and ends with a footer hint pointing to the fuller views.
-- **FR-024**: `doctor` MUST provide a `--json` form that is complete and untruncated: every skill, every requirement, each rule's verdict and reason, the integrity verdict, and the authentication status, suitable for an agent or CI to parse and branch on.
-- **FR-025**: `doctor` MUST support `--verbose` as the escape hatch that prints the raw underlying causes behind failures; errors MUST go to stderr and report data to stdout.
-- **FR-026**: Every `doctor` failure message MUST follow errors-as-navigation: state what failed, the real (never-swallowed) underlying cause, and a suggested fix.
+- **FR-029**: `doctor` MUST provide a compact human report grouping skills into eligible/ineligible, summarizing each finding, and ending with a footer hint pointing to the fuller views.
+- **FR-030**: `doctor` MUST provide a `--json` form that is complete and untruncated: every skill, every requirement, each rule's verdict and reason, the integrity verdict, and the network-rule status.
+- **FR-031**: `doctor` MUST support `--verbose` as the escape hatch printing raw underlying causes; errors MUST go to stderr and report data to stdout.
+- **FR-032**: Every `doctor` failure message MUST follow errors-as-navigation: what failed, the real (never-swallowed) cause, and a suggested fix.
+
+**Extensibility (developer outcome)**
+
+- **FR-033**: The rule engine MUST expose a single rule contract such that a contributor can add a new rule by implementing that contract and registering it, with the new rule evaluated and rendered uniformly (human + `--json`) without changes to the engine core or renderer.
+- **FR-034**: Each rule MUST be unit-testable in isolation against a fact fixture, without invoking the CLI or the network.
 
 **Co-evolution & docs**
 
-- **FR-027**: The consolidated `skillrig` agent skill MUST be extended to cover `doctor` (a `doctor` activity reference plus updated routing and triggering keywords), with no new top-level skill created, and its triggering accuracy validated.
-- **FR-028**: The CLI design contract and the roadmap MUST be updated in the same change to reflect `doctor` (its classification, flags, exit-code-3 introduction, and that roadmap 005 + 006 are delivered by this slice), and the architecture document kept in sync as the design is refined.
+- **FR-035**: The consolidated `skillrig` agent skill MUST be extended to cover `doctor` (and the `add` readiness notice) — a reference plus updated routing/triggering keywords, no new top-level skill — with triggering accuracy validated.
+- **FR-036**: The CLI design contract and the roadmap MUST be updated in the same change to reflect `doctor` (its audience-vs-`verify` framing, the rule set, network posture, `add` notice, exit-code-3 introduction, and that roadmap 005 + 006 are delivered by slice 004), and the architecture document kept in sync.
 
 ### Key Entities *(include if feature involves data)*
 
-- **Requirement**: One declared dependency of a vendored skill — the tool name to look for, an optional version constraint, the source it comes from (which determines public-vs-private and thus whether authentication applies), and the manager that provisions it (which signals whether a declarative version source can be trusted). Parsed from the vendored skill manifest; never written to the lockfile (the manifest is the single source of truth).
-- **Health Report**: The complete result of a `doctor` run — per-skill eligibility (eligible/ineligible), per-requirement rule verdicts with reasons and advisories, the integrity verdict, and the authentication status — rendered compactly for humans and completely for `--json`.
-- **Rule**: An independent, deterministic check evaluated by the engine (presence, version, authentication, integrity), each producing a verdict (pass / fail / advisory) and an actionable reason; the rule set is extensible.
-- **Declarative Version Source**: A recognized, data-readable declaration of a tool's version in the consumer repo (the `mise.toml` `[tools]` pins) — the only trusted basis for version-constraint evaluation.
-- **Eligibility Partition**: The grouping of vendored skills into those whose every requirement is satisfied and those with at least one unmet requirement, each ineligible entry carrying its specific failing reason(s).
+- **Requirement**: One declared dependency of a vendored skill — the tool name (looked up on PATH and against `mise.toml`), an optional version constraint, the source (which, when a parseable GitHub repo, enables the auth-reachability rule), and the manager (provisioning hint). Parsed from the vendored skill manifest; never written to the lockfile.
+- **Rule**: An independent check (`path-presence`, `mise-version-check`, `source-auth-reachability`, `integrity`, …) producing a verdict (pass / fail / warning / advisory / N/A) and an actionable reason. The set is extensible via a single rule contract.
+- **Health Report**: The complete result of a run — per-skill eligibility, per-requirement per-rule verdicts with reasons/warnings/advisories, the integrity verdict, and the network-rule status — rendered compactly for humans and completely for `--json`.
+- **mise Version Pin**: A tool's version declaration in the consumer repo's `mise.toml` `[tools]` — the only trusted basis for version-constraint evaluation; may be concrete (checkable) or non-concrete (warning).
+- **Eligibility Partition**: The grouping of vendored skills into those whose every rule is satisfied and those with at least one failing rule, each ineligible entry carrying its specific failing reason(s).
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: A user running `skillrig doctor` on a repo with a missing required backing CLI learns, from a single command, exactly which tool is missing and which skill needs it — without consulting any other tool or documentation.
-- **SC-002**: For any given repo state, `doctor` produces the same verdict and exit code on every run (fully deterministic) and touches no files (no mutations), verified by repeated runs.
-- **SC-003**: `doctor` completes its checks using only local data — no network access is required or attempted — so it runs identically offline, in CI, and air-gapped.
-- **SC-004**: When a required private backing CLI cannot be authenticated, `doctor` reports an authentication failure that is unambiguously distinct from "tool missing," so a user takes the correct corrective action (fix credentials, not reinstall) on the first attempt.
-- **SC-005**: `doctor` never reports a version verdict it cannot determine deterministically: every version pass/fail traces to a declarative source, and every undeterminable version is reported as an explicit "unverified" advisory rather than a guess.
-- **SC-006**: CI can gate on `doctor` purely by its exit code — `0` for a healthy/ready repo, `2` for an integrity problem, `3` for a prerequisite problem — and the mapping is stable across runs.
-- **SC-007**: An agent or CI consumer can extract any individual finding (a specific skill's eligibility, a specific requirement's verdict, the integrity result, the auth status) from `doctor --json` without the data being truncated or summarized away.
-- **SC-008**: The human form of `doctor` stays compact (bounded output) regardless of how many skills/requirements are present, while the `--json` form remains complete — verified by output-shape assertions, not substring matching.
+- **SC-001**: A developer/agent running `skillrig doctor` on a repo with a missing required backing CLI learns, from one command, exactly which tool is missing and which skill needs it — without consulting any other tool.
+- **SC-002**: A developer vendoring a skill whose backing CLI is absent is told so at `add` time (with a mise hint when applicable), so a missing prerequisite is discovered at vendor time rather than at agent-run time.
+- **SC-003**: `doctor`'s local rules produce the same findings and exit code on every run against an unchanged repo (deterministic) and run identically with no network when `--offline` is used; online rules add reachability/auth signal when the network is available and degrade to an explicit advisory when it is not — never a false failure.
+- **SC-004**: When a required private backing CLI hosted on a GitHub repo cannot be authenticated, `doctor` reports an authentication failure unambiguously distinct from "tool missing," so the user takes the correct corrective action (fix credentials, not reinstall) on the first attempt.
+- **SC-005**: `doctor` never reports a version verdict it cannot justify: every version pass/fail traces to a concrete `mise.toml` pin, and every unverifiable version (no pin or non-concrete pin) is reported as an explicit warning/advisory rather than a guess.
+- **SC-006**: A tool present in `mise.toml` but absent from PATH is reported as a prerequisite failure (exit 3), so a mis-shimmed mise environment is caught rather than masked.
+- **SC-007**: An agent or CI consumer can extract any individual finding (a skill's eligibility, a requirement's per-rule verdict, the integrity result, the network-rule status) from `doctor --json` without truncation.
+- **SC-008**: The human form of `doctor` stays compact (bounded output) regardless of skill/requirement count, while `--json` remains complete — verified by output-shape assertions, not substring matching.
+- **SC-009**: A contributor can add a new health rule by implementing and registering the rule contract, and the rule is evaluated, rendered (human + `--json`), and unit-tested in isolation — with no change to the engine core or renderer.
 
 ### Previous work
 
 These merged slices established the primitives `doctor` builds on:
 
-- **001 — `init` + origin resolution**: the single origin resolver and the Environment-pattern command conventions `doctor` follows. (Epic `SL-227789`.)
-- **002 — `skillcore` + local `add` + `verify`**: the shared integrity primitive (label-honesty + orphan detection) `doctor` rolls up, and the manifest data model carrying tool requirements (parsed, not yet consumed).
-- **003 — `search` + remote `add` + `index`**: the migration to `SKILL.md` frontmatter where requirements are declared (`metadata.x-skillrig.requires`), and the auth/token resolution pattern (`os.exec` of `gh`/token env) reused for the authentication-reachability rule.
+- **001 — `init` + origin resolution**: the single origin resolver and Environment-pattern command conventions. (Epic `SL-227789`.)
+- **002 — `skillcore` + local `add` + `verify`**: the shared integrity primitive (label-honesty + orphan) `doctor` rolls up, and the manifest data model carrying tool requirements (parsed, not yet consumed).
+- **003 — `search` + remote `add` + `index`**: the migration to `SKILL.md` frontmatter where requirements are declared (`metadata.x-skillrig.requires`), and the auth/token-resolution pattern (`os.exec` of `gh`/token env) reused by `source-auth-reachability`. `add` is also extended here for the readiness notice.
 
 Open tracked items related to but **out of scope** for this slice:
 
 - **Vendor more skills into the fixture origin** (cli#9): broadens multi-skill end-to-end coverage; useful test substrate but not a `doctor` dependency.
-- **Flag if origin is not pointing at default branch** (cli#6): a future `doctor`-adjacent rule candidate; not included here.
+- **Flag if origin is not pointing at default branch** (cli#6): a future `doctor` rule candidate (a natural fit for the extensible engine); not included here.
