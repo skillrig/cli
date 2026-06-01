@@ -2,5 +2,6 @@
 # Issue tracking is now built into sl CLI (sl issue commands)
 
 [tools]
-"github:kevindutra/crit" = "latest"
+"github:kevindutra/crit" = "latest" # TODO: to be removed
+zizmor = "1.25.2"
 # Add your project tools here
