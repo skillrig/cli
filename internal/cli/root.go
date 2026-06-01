@@ -22,6 +22,16 @@ type globalOpts struct {
 	verbose bool
 }
 
+// Build metadata, injected at release time via -ldflags -X (see
+// .goreleaser.yaml). Keeping these here — not in main — lets main stay a thin
+// os.Exit(cli.Execute()) shim (architecture: main is a shim only). Defaults
+// describe a local (non-release) build.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 // newRootCmd builds the root `skillrig` command and its subtree. It is exported
 // indirectly via Execute; tests construct it directly to drive commands
 // in-process with SetArgs/SetOut/SetErr.
@@ -40,11 +50,20 @@ func newRootCmd(opts *globalOpts) *cobra.Command {
 		// docs/design/cli.md Principle 2 / Rule 5), so silence cobra's built-ins.
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		// `skillrig --version`: report the embedded build metadata. cobra adds
+		// the --version flag from this field and renders it via the template
+		// below. (There is no `version` subcommand — only the flag.)
+		Version: version,
 		// Bare invocation prints help (cli.md Level-0 progressive discovery).
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
 	}
+
+	// Two-level version output: a single human line, fully reproducible
+	// (commit + build date) so a reported binary can be traced to a release.
+	root.SetVersionTemplate(fmt.Sprintf(
+		"skillrig {{.Version}} (commit %s, built %s)\n", commit, date))
 
 	root.PersistentFlags().BoolVar(&opts.json, "json", false, "emit a complete JSON result on stdout instead of human text")
 	root.PersistentFlags().BoolVar(&opts.verbose, "verbose", false, "print underlying paths / raw causes behind summaries and errors")

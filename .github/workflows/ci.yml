@@ -1,0 +1,88 @@
+# CI — quality gate run on every PR (and on pushes to main). Mirrors the
+# `make check` pre-merge gate (fmt + vet + lint + test) and additionally
+# validates the GoReleaser release config so a broken release build is caught
+# on the PR, never at tag time. workflow_dispatch lets it be triggered manually
+# for verification.
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref (e.g. rapid PR pushes).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: quality (fmt · vet · lint · test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: actions/setup-go@v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt (must be clean)
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt found unformatted files:"
+            echo "$unformatted"
+            echo "run 'make fmt' and commit the result"
+            exit 1
+          fi
+
+      - name: go mod tidy (must be clean)
+        # The release build does NOT run `go mod tidy` (it must build the tag
+        # verbatim), so tidiness is enforced here instead.
+        run: |
+          go mod tidy
+          if ! git diff --exit-code go.mod go.sum; then
+            echo "::error::go mod tidy changed go.mod/go.sum — run 'go mod tidy' and commit the result"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9.2.1
+        with:
+          version: v2.12.2
+
+      - name: test (unit + integration)
+        run: go test ./...
+
+  goreleaser-check:
+    name: goreleaser (config + cross-compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0 # full history/tags for version detection
+
+      - uses: actions/setup-go@v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: goreleaser/goreleaser-action@v7.2.2
+        with:
+          install-only: true
+          version: "~> v2"
+
+      - name: goreleaser check (validate config)
+        run: goreleaser check
+
+      - name: goreleaser build (cross-compile snapshot, no publish)
+        run: goreleaser build --snapshot --clean

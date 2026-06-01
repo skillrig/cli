@@ -126,6 +126,9 @@ linters:
     goconst:
       min-len: 3
       min-occurrences: 4
+      ignore-tests: true # table-driven test fixtures repeat literals by design;
+      # hoisting them to constants hurts readability (same spirit as the
+      # _test.go gosec carve-out below).
     gocyclo:
       min-complexity: 13 # strict; lower => stricter
     nolintlint:
@@ -137,14 +140,12 @@ linters:
       branch-max-lines: 2
 
 formatters:
+  # Only the formatters listed under `enable` run; the v2 schema has no
+  # `formatters.disable` (gci/goimports/golines/swaggo are off by not being
+  # enabled). gofumpt subsumes gci/goimports grouping for us.
   enable:
     - gofmt
     - gofumpt
-  disable:
-    - gci        # import grouping/ordering — gofumpt already handles standard grouping
-    - goimports  # import management — redundant with gofumpt
-    - golines    # line wrapping — too opinionated, can break readability
-    - swaggo     # swaggo comment formatting — only for swaggo users
   settings:
     gofumpt:
       extra-rules: true
