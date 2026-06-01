@@ -195,6 +195,78 @@ func writeAlignedColumns(w io.Writer, rows [][]string) error {
 	return tw.Flush()
 }
 
+// showResultJSON is the complete, untruncated --json view of a show: the
+// resolved origin and the single matched skill with every field add needs. It
+// reuses the skillcore.CatalogEntry JSON tags, so the record is byte-for-byte the
+// same shape search emits per entry — one entry, named `skill`.
+type showResultJSON struct {
+	Origin string                 `json:"origin"`
+	Skill  skillcore.CatalogEntry `json:"skill"`
+}
+
+// showFooterPrefix is the next-step footer for a human show — the skill name is
+// appended so the hint is a runnable command (cli.md Principle 3).
+const showFooterPrefix = "→ vendor it: skillrig add "
+
+// renderShowResult writes a single skill's full record to w. With jsonOut it
+// emits one complete JSON object (origin + the whole catalog entry, all fields
+// present); otherwise a human-friendly labelled block whose defining feature is
+// the COMPLETE, untruncated description — the gap issue #17 closes, since search
+// clips it to ~80 chars. The block is a fixed handful of header/field lines plus
+// the description body and a footer hint. Data goes to stdout (the caller passes
+// cmd.OutOrStdout()).
+func renderShowResult(w io.Writer, origin string, e skillcore.CatalogEntry, jsonOut bool) error {
+	if jsonOut {
+		enc := json.NewEncoder(w)
+		enc.SetEscapeHTML(false)
+
+		return enc.Encode(showResultJSON{Origin: origin, Skill: e})
+	}
+
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "%s  %s  (%s)\n", e.Name, e.Version, e.Namespace)
+	fmt.Fprintf(&b, "path:     %s\n", e.Path)
+
+	if len(e.Topics) > 0 {
+		fmt.Fprintf(&b, "topics:   %s\n", strings.Join(e.Topics, ", "))
+	}
+
+	if len(e.Requires) > 0 {
+		fmt.Fprintf(&b, "requires: %s\n", joinRequires(e.Requires))
+	}
+
+	// The whole point of show: the complete description, untruncated, set off by a
+	// blank line so it reads as the body of the record.
+	if desc := strings.TrimSpace(e.Description); desc != "" {
+		fmt.Fprintf(&b, "\n%s\n", desc)
+	}
+
+	fmt.Fprintf(&b, "\n%s%s\n", showFooterPrefix, e.Name)
+
+	_, err := io.WriteString(w, b.String())
+
+	return err
+}
+
+// joinRequires renders a skill's backing-tool requirements as a compact human
+// summary — "tool (version)" joined by commas, or a bare tool when no version
+// constraint is recorded — mirroring search's requires summary.
+func joinRequires(reqs []skillcore.Require) string {
+	parts := make([]string, 0, len(reqs))
+
+	for _, r := range reqs {
+		part := r.Tool
+		if r.Version != "" {
+			part += " (" + r.Version + ")"
+		}
+
+		parts = append(parts, part)
+	}
+
+	return strings.Join(parts, ", ")
+}
+
 // searchEmptyFooter is the next-step hint for an empty search result (still exit 0).
 const searchEmptyFooter = "→ broaden the query, or run skillrig search with no filter to list all"
 
