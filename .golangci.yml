@@ -126,6 +126,9 @@ linters:
     goconst:
       min-len: 3
       min-occurrences: 4
+      ignore-tests: true # table-driven test fixtures repeat literals by design;
+      # hoisting them to constants hurts readability (same spirit as the
+      # _test.go gosec carve-out below).
     gocyclo:
       min-complexity: 13 # strict; lower => stricter
     nolintlint:
