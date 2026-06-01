@@ -22,10 +22,19 @@ type globalOpts struct {
 	verbose bool
 }
 
+// BuildInfo carries release metadata injected at build time (GoReleaser
+// -ldflags). main constructs it from its package-level vars and hands it to
+// Execute; defaults ("dev"/"none"/"unknown") describe a local build.
+type BuildInfo struct {
+	Version string
+	Commit  string
+	Date    string
+}
+
 // newRootCmd builds the root `skillrig` command and its subtree. It is exported
 // indirectly via Execute; tests construct it directly to drive commands
 // in-process with SetArgs/SetOut/SetErr.
-func newRootCmd(opts *globalOpts) *cobra.Command {
+func newRootCmd(opts *globalOpts, build BuildInfo) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "skillrig",
 		Short: "Manage your org's agent-skills library",
@@ -40,11 +49,19 @@ func newRootCmd(opts *globalOpts) *cobra.Command {
 		// docs/design/cli.md Principle 2 / Rule 5), so silence cobra's built-ins.
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		// `skillrig --version` / `skillrig version`: report the embedded build
+		// metadata. cobra renders Version via the template below.
+		Version: build.Version,
 		// Bare invocation prints help (cli.md Level-0 progressive discovery).
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
 	}
+
+	// Two-level version output: a single human line, fully reproducible
+	// (commit + build date) so a reported binary can be traced to a release.
+	root.SetVersionTemplate(fmt.Sprintf(
+		"skillrig {{.Version}} (commit %s, built %s)\n", build.Commit, build.Date))
 
 	root.PersistentFlags().BoolVar(&opts.json, "json", false, "emit a complete JSON result on stdout instead of human text")
 	root.PersistentFlags().BoolVar(&opts.verbose, "verbose", false, "print underlying paths / raw causes behind summaries and errors")
@@ -92,9 +109,9 @@ func errorMessage(err error, verbose bool) string {
 
 // Execute builds and runs the root command, renders any error as navigation to
 // stderr, and returns the process exit code. main is a thin shim over this.
-func Execute() int {
+func Execute(build BuildInfo) int {
 	opts := &globalOpts{}
-	root := newRootCmd(opts)
+	root := newRootCmd(opts, build)
 
 	err := root.Execute()
 	if err != nil {

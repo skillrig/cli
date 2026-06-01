@@ -14,7 +14,11 @@ __pycache__/
 .DS_Store
 *.swp
 
-# Secrets / captured traffic — NEVER commit (Qodo API token; HAR dumps may embed bearer tokens)
+# Secrets / captured traffic — NEVER commit (Qodo API token; HAR dumps may embed bearer tokens; GitHub App private keys)
 qodo-auth.key
 *.key
+*.pem
 *.har
+
+# GoReleaser output
+/dist/

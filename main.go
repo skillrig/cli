@@ -9,6 +9,14 @@ import (
 	"github.com/skillrig/cli/internal/cli"
 )
 
+// Build metadata. Defaults describe a local (non-release) build; GoReleaser
+// overrides them at release time via -ldflags -X (see .goreleaser.yaml).
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
-	os.Exit(cli.Execute())
+	os.Exit(cli.Execute(cli.BuildInfo{Version: version, Commit: commit, Date: date}))
 }

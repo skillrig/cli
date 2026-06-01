@@ -1,0 +1,25 @@
+# Keep CI/release action pins and Go modules current. Dependabot bumps the
+# version tags pinned in the workflows (github-actions) and go.mod (gomod).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore"
+    groups:
+      go-modules:
+        patterns:
+          - "*"

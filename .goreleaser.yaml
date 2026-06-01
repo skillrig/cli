@@ -1,0 +1,69 @@
+# GoReleaser config — single Go CLI binary (skillrig).
+# Schema reference: https://goreleaser.com/customization/ (config schema v2).
+# `make build` is the local equivalent; this file owns the RELEASE build matrix.
+#
+# release-please owns CHANGELOG.md and the release notes, so GoReleaser's own
+# changelog generation is disabled (changelog.disable) to avoid duplicate notes.
+# Validate locally with `goreleaser check` and `goreleaser build --snapshot --clean`
+# (both run in CI on every PR — see .github/workflows/ci.yml).
+version: 2
+
+project_name: skillrig
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: skillrig
+    main: .
+    binary: skillrig
+    env:
+      - CGO_ENABLED=0 # static binary, no libc linkage
+    flags:
+      - -trimpath
+    # Inject build metadata into main.{version,commit,date} (see main.go).
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .Date }}
+    # Windows is intentionally NOT built: it is not validated in e2e.
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}" # reproducible archive timestamps
+
+archives:
+  - id: skillrig
+    ids:
+      - skillrig
+    # Plural `formats` is the current schema key (singular `format` is
+    # deprecated since GoReleaser v2.6). README*/LICENSE*/CHANGELOG* are
+    # auto-included by default when present.
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# release-please writes the changelog; keep GoReleaser out of it.
+changelog:
+  disable: true
+
+# owner/repo are auto-detected from the git remote (skillrig/cli).
+release:
+  draft: false
+  prerelease: false
+  mode: replace
+
+snapshot:
+  # `version_template` is the current schema key (old `name_template` is
+  # deprecated since v2.2). Must not produce a leading `v`.
+  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
