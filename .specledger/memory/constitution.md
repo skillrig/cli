@@ -1,5 +1,18 @@
 <!--
   Sync Impact Report
+  Version change: 2.1.1 → 2.2.0 (amendment — 2026-06-01, resolves issue #10)
+    Added principle:
+      X. User-Facing Documentation Co-Evolution (new) — when feature work changes CLI
+        behavior, a task MUST be created to update the root README so it never lags the
+        command surface. Explicitly framed as an extension of the existing co-evolution
+        discipline (IX skill sync + the docs/design sync rule), which named neither the
+        root README — the gap that let 002/003 ship add/verify/search/index while the
+        README still described only init (issue #10).
+    Amended section:
+      - Development Workflow — added a bullet binding the root README update task to every
+        CLI behavior change.
+    No other principle changes.
+  ---
   Version change: 2.1.0 → 2.1.1 (terminology patch — 2026-05-31, resolves issue #7)
     - §III ground-truth: "skills/*/skill.toml walk" → "skills/*/SKILL.md frontmatter walk
       (skillrig index)"; mise `[[requires]]` → `metadata.x-skillrig.requires` (manifest moved
@@ -163,6 +176,25 @@ to fight (it is the rationale behind the origin's `lint` conformance gate, cli.m
 architecture §2b). A skill that ships with a vague description is the same defect
 skillrig polices in others.
 
+### X. User-Facing Documentation Co-Evolution
+Whenever a user story / feature work changes the behavior of the CLI, a task MUST
+be created to update the root **`README.md`**. The README is the project's
+entry-point document — the first thing a human or agent reads to learn what the CLI
+does and how to use it — so it must not lag the shipped command surface
+(adds/removes/renames of a command or flag) or user-facing behavior (exit-code
+meanings, origin-resolution rules, output contract, configuration file shape).
+
+This is the same co-evolution discipline the constitution already applies
+elsewhere, extended to the README — it is **not** a new kind of rule:
+- Principle IX requires every CLI change to ship a matching **skill** update.
+- The *Architecture & CLI Design* and *Development Workflow* sections require the
+  `docs/design/` contract (notably `cli.md`) to be kept in sync in the same branch.
+
+None of those named the **root README**, which is exactly how features 002 and 003
+shipped `add`, `verify`, `search`, and `index` while the README still described only
+`init` (issue #10). Principle X closes that specific gap: the README's update task
+travels with the feature, the same way the skill and design-doc updates do.
+
 ## Architecture & CLI Design
 
 The detailed CLI architecture and command-pattern rules live in the git-tracked
@@ -212,6 +244,10 @@ implementation details evolve and live with the test code.
   [pattern-gate checklist](../../docs/design/checklist-template.md).
 - Design docs in `docs/design/` MUST be kept in sync with implementation changes;
   CLI behavior changes update `cli.md` in the same branch.
+- When a user story / feature changes CLI behavior, a task to update the root
+  `README.md` MUST be created so the README never lags the command surface
+  (Principle X) — the same co-evolution discipline as the skill (IX) and the
+  `docs/design/` contract above.
 - Every CLI change ships a skill update with verified trigger coverage (Principle IX).
 
 ## Agent Preferences
@@ -234,4 +270,4 @@ be justified against Principles VI, VII, and VIII. The binding CLI design contra
 is [docs/design/cli.md](../../docs/design/cli.md); changes to CLI behavior must
 remain consistent with it.
 
-**Version**: 2.1.1 | **Ratified**: 2026-05-24 | **Last Amended**: 2026-05-31
+**Version**: 2.2.0 | **Ratified**: 2026-05-24 | **Last Amended**: 2026-06-01
