@@ -1,0 +1,49 @@
+# Validate that every PR title is a Conventional Commit.
+#
+# We squash-merge with the PR title as the commit subject (repo setting
+# squash_merge_commit_title=PR_TITLE), and release-please derives the version
+# bump + changelog from that subject. So a non-conventional PR title would
+# silently break versioning — this check is the guard.
+#
+# pull_request_target is used (not pull_request) so the check still runs for
+# fork PRs; it only reads the title via the API and never checks out PR code,
+# so there is no untrusted-code execution risk.
+name: pr-title
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  pull-requests: read
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: conventional PR title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Keep in sync with release-please's understanding of types.
+          types: |
+            feat
+            fix
+            docs
+            chore
+            ci
+            refactor
+            perf
+            test
+            build
+            revert
+          # Subject must not be empty and not start with an uppercase letter.
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            The subject "{subject}" must start with a lowercase letter, e.g.
+            "fix: correct the origin resolver", not "fix: Correct ...".

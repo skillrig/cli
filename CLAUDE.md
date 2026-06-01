@@ -67,6 +67,8 @@ Features follow SpecLedger: **Specify → Clarify → Plan → Tasks → Review 
 
 **Commit & PR conventions.** Conventional prefixes (`feat:`, `fix:`, `chore:`, `docs:`), imperative subjects ≤72 chars, scoped to the feature (e.g. `docs(002): …`). Reference related issues in the body; call out migrations / new binaries explicitly. PRs carry a concise summary + testing evidence (`make test-unit`, `make test-integration`) and a CLI transcript when behavior changes.
 
+**PR titles are load-bearing.** The repo is **squash-merge only**, and the squash commit subject is the **PR title** (GitHub setting `squash_merge_commit_title=PR_TITLE`). `release-please` derives the version bump + changelog from that subject, so **every PR title must be a Conventional Commit** — enforced by the `pr-title` workflow (`.github/workflows/pr-title.yml`). Only `fix:` (→ patch), `feat:` (→ minor), and `!`/`BREAKING CHANGE` (→ major while ≥1.0.0) cut a release; `docs:`/`chore:`/`ci:`/`refactor:`/`test:`/`build:` land without a release. Don't dress a non-functional change as `fix:`/`feat:` to force a release.
+
 **Work-item tracking.** The durable, team-visible record lives in the SpecLedger issue tracker — `sl issue`, stored per-spec in `specledger/<spec>/issues.jsonl` (committed to git). The agent's in-session task list (the `Task*` tools) is an ephemeral execution aid, not a substitute for that committed record.
 
 <!-- >>> specledger-generated -->
