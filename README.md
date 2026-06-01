@@ -1,23 +1,52 @@
 # skillrig
 
-`skillrig` is a CLI for pointing a repository (or your per-user default) at an
-**origin** — the `OWNER/REPO` that hosts your team's agent skills — and resolving
-which origin is active for any working directory. An origin reference is
-`OWNER/REPO[@REF]`; the optional `@REF` tracks a specific branch.
+`skillrig` is a single, generic, **consume-only** CLI for pointing a repository
+(or your per-user default) at an **origin** — the `OWNER/REPO` that hosts your
+team's agent skills — and managing the skills you vendor from it. The same binary
+serves humans, agents, and CI. There is no `publish` and no write credential in
+the binary: GitHub is the authority plane ("publishing" a skill is a PR to the
+origin).
 
-> NOTE: a skillrig **origin** is a GitHub repository with a determined structure, use the template repository provided to create your own origin.
+An origin reference is `OWNER/REPO[@REF]`; the optional `@REF` tracks a specific
+branch.
+
+> NOTE: a skillrig **origin** is a GitHub repository with a determined structure;
+> use the template repository provided to create your own origin.
 
 ## Install
 
-Requires Go 1.24+ and `git` on your `PATH` (used for an offline repo-root lookup).
+Requires Go 1.24+ and `git` on your `PATH` (used for offline repo-root lookups,
+tree-SHA recomputation, and fetching skills over git).
 
 ```sh
 go build -o skillrig .
 ```
 
-## Usage
+## The workflow
 
-### Bind a repo to an origin
+Most consumers follow one path — bind an origin once, then discover, vendor, and
+verify skills:
+
+```sh
+skillrig init --origin my-org/my-skills      # 1. bind this repo to an origin
+skillrig search terraform                     # 2. discover what the origin offers
+skillrig add terraform-plan-review            # 3. vendor a skill into .agents/skills/
+skillrig verify                               # 4. prove vendored skills are unchanged
+```
+
+Origin **maintainers** also run `skillrig index` inside the origin repo to
+regenerate the catalog that `search` reads (see [`index`](#index)).
+
+Every command resolves the active origin the same way (see
+[Origin resolution precedence](#origin-resolution-precedence)), accepts `--json`
+for a complete machine-readable result, and accepts `--verbose` to surface the
+raw cause behind any summary or error.
+
+## Commands
+
+### `init`
+
+Bind a repository (or your global default) to an origin.
 
 ```sh
 # Run from anywhere in the repo; the config lands at the git repository root.
@@ -37,23 +66,109 @@ skillrig init --origin my-org/my-skills@staging
 The optional `@REF` is validated for shape only (offline) — it is not checked
 against the remote.
 
-### Set a personal default
-
 ```sh
-# Used when a repo has no origin of its own.
+# Set a personal default, used when a repo has no origin of its own.
 skillrig init --origin my-org/my-skills --global
-```
 
-Writes `$XDG_CONFIG_HOME/skillrig/config.toml` (or `~/.config/skillrig/config.toml`).
-
-### Scripts and agents
-
-```sh
 # Never prompt; fail fast if --origin is missing (safe for CI/agents).
 skillrig init --origin my-org/my-skills --non-interactive
+```
 
-# Machine-readable result.
-skillrig init --origin my-org/my-skills --json
+`--global` writes `$XDG_CONFIG_HOME/skillrig/config.toml` (or
+`~/.config/skillrig/config.toml`).
+
+### `search`
+
+Discover the skills your configured origin publishes by reading its catalog
+(`index.json`). Read-only; needs a resolvable origin but no git working tree. A
+free-text `QUERY` is a case-insensitive token-AND substring over
+name + description + topics (a skill matches only if **every** term is present),
+and `--topic` adds an exact-string AND filter. An empty result is success
+(exit 0).
+
+```sh
+# List every skill the origin publishes.
+skillrig search
+
+# Free-text query (token-AND over name + description + topics).
+skillrig search terraform plan
+
+# Filter by topic (repeatable; AND across topics).
+skillrig search --topic aws --topic terraform
+```
+
+### `add`
+
+Vendor a named skill from the configured origin into the canonical
+`.agents/skills/<skill>/`, recording its identity (version, commit, tree-SHA,
+path) in `.skillrig/skills-lock.json`. `add` copies the skill byte-identically,
+injecting nothing. It is idempotent on identical content and refuses to overwrite
+a vendored skill whose on-disk content diverges from the lock unless you pass
+`--force`. Requires a git repository; commit the result, then run `skillrig
+verify`.
+
+The acquisition form is chosen automatically and reported in the result:
+
+- **Local** — the configured origin is checked out at `<repo-root>/OWNER/REPO`;
+  `add` reads that checkout (no network). Keep the checkout out of your index
+  (e.g. `echo 'my-org/' >> .git/info/exclude`).
+- **Remote** — no local checkout exists; `add` fetches the skill subtree over git
+  from the origin, using a GitHub token from `GH_TOKEN` / `GITHUB_TOKEN` /
+  `gh auth token` when one is available (public origins need none).
+
+```sh
+# Vendor a skill from your configured origin.
+skillrig add terraform-plan-review
+
+# Pin an immutable version (a bare semver expands via the origin's tag scheme;
+# anything else is a literal git tag or commit SHA).
+skillrig add terraform-plan-review --pin v1.4.0
+
+# Preview what would be vendored, writing nothing.
+skillrig add terraform-plan-review --dry-run
+
+# Overwrite a locally-diverged copy with the origin's content.
+skillrig add terraform-plan-review --force
+```
+
+### `verify`
+
+Check **this** repository's vendored skills (`.agents/skills`) against the
+committed lock (`.skillrig/skills-lock.json`) — label-honesty (git tree-SHA) plus
+orphan/completeness — offline, deterministic, and read-only (it recomputes
+tree-SHAs and writes nothing). It needs no origin and no network, which makes it a
+load-bearing CI gate.
+
+```sh
+# Verify this repo's vendored skills match their recorded versions (CI gate).
+skillrig verify
+
+# Machine-readable per-skill verdicts for an agent / jq.
+skillrig verify --json
+```
+
+`verify` exits `0` when everything matches, `2` on any verification failure
+(mismatch / orphan / missing / dirty), and `1` on a usage problem (e.g. a
+malformed lock or not a git repo).
+
+### `index`
+
+**Origin-maintainer command.** Run inside the origin repo (locally or in CI on
+merge) to regenerate the origin's machine-readable catalog (`index.json`) by
+walking its skills directory and parsing each skill's `SKILL.md` frontmatter —
+the same parser `add` and `verify` use. It is a single-tip, full regeneration:
+the catalog is overwritten wholesale, sorted by name with a stable key order, so
+regenerating over an unchanged skill set is byte-identical.
+
+```sh
+# Regenerate index.json at the origin repo root.
+skillrig index
+
+# Write the catalog to an explicit path.
+skillrig index --out catalog/index.json
+
+# Machine-readable summary of what was generated.
+skillrig index --json
 ```
 
 ## Origin resolution precedence
@@ -78,12 +193,18 @@ SKILLRIG_ORIGIN  >  project .skillrig/config.toml (nearest ancestor)  >  global 
 
 ## Exit codes
 
+Exit codes are part of the contract — scripts and agents branch on them, so their
+meanings are fixed:
+
 | Code | Meaning |
 |------|---------|
 | `0`  | Success (including an idempotent no-op) |
 | `1`  | Usage or configuration error (bad flags, invalid origin, no origin configured) |
+| `2`  | Verification failure (`verify` found a mismatch / orphan / missing / dirty skill) |
 
-Codes `2` (verification) and `3` (prerequisite) are reserved for later commands.
+Code `3` (prerequisite) is reserved for a future command.
+
+Errors go to **stderr**; data goes to **stdout**.
 
 ## Configuration file
 

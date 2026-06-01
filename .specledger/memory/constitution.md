@@ -1,5 +1,15 @@
 <!--
   Sync Impact Report
+  Version change: 2.1.1 → 2.2.0 (amendment — 2026-06-01, resolves issue #10)
+    Added principle:
+      X. User-Facing Documentation Co-Evolution (new) — the root README MUST be updated
+        in the same branch whenever the command surface or user-facing behavior changes;
+        the README is the entry-point doc and a stale one is a defect (002/003 shipped
+        new commands — add/verify/search/index — without updating it: the gap this closes).
+    Amended section:
+      - Development Workflow — added a bullet binding the root README sync to every CLI change.
+    No other principle changes.
+  ---
   Version change: 2.1.0 → 2.1.1 (terminology patch — 2026-05-31, resolves issue #7)
     - §III ground-truth: "skills/*/skill.toml walk" → "skills/*/SKILL.md frontmatter walk
       (skillrig index)"; mise `[[requires]]` → `metadata.x-skillrig.requires` (manifest moved
@@ -163,6 +173,23 @@ to fight (it is the rationale behind the origin's `lint` conformance gate, cli.m
 architecture §2b). A skill that ships with a vague description is the same defect
 skillrig polices in others.
 
+### X. User-Facing Documentation Co-Evolution
+The root **`README.md`** is the project's entry-point document — the first thing a
+human or agent reads to learn what the CLI does and how to use it — so it MUST stay
+in sync with the shipped behavior. Whenever a feature branch changes the **command
+surface** (adds/removes/renames a command or flag) or any **user-facing behavior**
+(exit-code meanings, origin-resolution rules, output contract, configuration file
+shape), that branch MUST update `README.md` in the **same branch** as the code. A
+README that documents only a subset of the implemented commands is a **defect**, not
+a backlog item — the same standard this constitution applies to the design docs
+(`cli.md`) and the consolidated skill (Principle IX). Reviews MUST treat an
+out-of-date README as a blocking finding.
+
+This principle is corrective: features 002 and 003 added `add`, `verify`, `search`,
+and `index` while the README still described only `init` (issue #10). The remedy is
+not a one-time cleanup but a standing obligation — every CLI change ships its README
+update, just as it ships its skill update.
+
 ## Architecture & CLI Design
 
 The detailed CLI architecture and command-pattern rules live in the git-tracked
@@ -212,6 +239,9 @@ implementation details evolve and live with the test code.
   [pattern-gate checklist](../../docs/design/checklist-template.md).
 - Design docs in `docs/design/` MUST be kept in sync with implementation changes;
   CLI behavior changes update `cli.md` in the same branch.
+- The root `README.md` MUST be updated in the same branch whenever the command
+  surface or user-facing behavior changes (Principle X) — a README that lags the
+  implemented commands is a blocking review finding.
 - Every CLI change ships a skill update with verified trigger coverage (Principle IX).
 
 ## Agent Preferences
@@ -234,4 +264,4 @@ be justified against Principles VI, VII, and VIII. The binding CLI design contra
 is [docs/design/cli.md](../../docs/design/cli.md); changes to CLI behavior must
 remain consistent with it.
 
-**Version**: 2.1.1 | **Ratified**: 2026-05-24 | **Last Amended**: 2026-05-31
+**Version**: 2.2.0 | **Ratified**: 2026-05-24 | **Last Amended**: 2026-06-01
