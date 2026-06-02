@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/skillrig/cli/pkg/skillcore"
 )
@@ -156,8 +157,16 @@ func renderSearchResult(w io.Writer, origin string, matches []skillcore.CatalogE
 
 	var b strings.Builder
 
+	// Align name/version/description into fixed-width columns so the ragged,
+	// unreadable output of issue #21 becomes a clean table. The table is rendered
+	// before the footer so the summary line is not drawn into the columns.
+	rows := make([][]string, 0, len(matches))
 	for _, e := range matches {
-		fmt.Fprintf(&b, "%s  %s  — %s\n", e.Name, e.Version, truncateDesc(e.Description))
+		rows = append(rows, []string{e.Name, e.Version, "— " + truncateDesc(e.Description)})
+	}
+
+	if err := writeAlignedColumns(&b, rows); err != nil {
+		return err
 	}
 
 	fmt.Fprintf(&b, "%d skill(s) · run: skillrig add <name>\n", len(matches))
@@ -167,18 +176,42 @@ func renderSearchResult(w io.Writer, origin string, matches []skillcore.CatalogE
 	return err
 }
 
+// writeAlignedColumns renders rows as space-padded, fixed-width columns via the
+// stdlib text/tabwriter (elastic tabstops) so columns line up across rows in
+// compact human output. It is the one shared table renderer for search and the
+// verify failure list — no duplicated tabwriter setup. Each row's cells are
+// tab-joined; the final cell is newline-terminated, so it is never right-padded
+// (no trailing whitespace). Cell width is counted in runes (tabwriter assumes
+// equal-width code points), matching truncateDesc's rune budget so the column
+// math and the clip agree. An empty rows slice writes nothing.
+func writeAlignedColumns(w io.Writer, rows [][]string) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	for _, cells := range rows {
+		if _, err := fmt.Fprintln(tw, strings.Join(cells, "\t")); err != nil {
+			return err
+		}
+	}
+
+	return tw.Flush()
+}
+
 // searchEmptyFooter is the next-step hint for an empty search result (still exit 0).
 const searchEmptyFooter = "→ broaden the query, or run skillrig search with no filter to list all"
 
 // truncateDesc collapses a description's newlines to spaces and clips it to
-// searchDescWidth for compact human output (the complete text is in --json).
+// searchDescWidth for compact human output (the complete text is in --json). The
+// width budget and the clip are counted in runes, not bytes: byte-slicing could
+// split a multibyte rune into invalid UTF-8, and rune counting matches how
+// tabwriter measures cell width, so the column budget and the alignment agree.
 func truncateDesc(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) <= searchDescWidth {
+
+	r := []rune(s)
+	if len(r) <= searchDescWidth {
 		return s
 	}
 
-	return s[:searchDescWidth-1] + "…"
+	return string(r[:searchDescWidth-1]) + "…"
 }
 
 // indexResult is the presentation-layer view of an index generation: where the
@@ -283,12 +316,21 @@ func renderVerifyFailure(w io.Writer, r skillcore.Report) error {
 
 	fmt.Fprintf(&b, "verify FAILED: %d of %d skills\n", failed, total)
 
+	// Align the failing skills' reason column the same way search aligns its
+	// table — the marker+name stays the first (tab-terminated) cell so "✗ <name>"
+	// reads as one token, and reasons line up across rows.
+	rows := make([][]string, 0, failed)
+
 	for _, v := range r.Verdicts {
 		if v.Status == skillcore.StatusOK {
 			continue
 		}
 
-		fmt.Fprintf(&b, "  ✗ %s  %s\n", v.Name, verdictLine(v))
+		rows = append(rows, []string{"  ✗ " + v.Name, verdictLine(v)})
+	}
+
+	if err := writeAlignedColumns(&b, rows); err != nil {
+		return err
 	}
 
 	b.WriteString(verifyFailFooter + "\n")

@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "input=$(cat); case \"$input\" in *'.go\"'*) cd \"$CLAUDE_PROJECT_DIR\" || exit 0; out=$(go test ./internal/sourceguard/ -count=1 2>&1) || { printf '%s\\n' \"$out\" >&2; exit 2; };; esac",
+            "statusMessage": "non-ASCII source guard",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
