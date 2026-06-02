@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.1](https://github.com/skillrig/cli/compare/v1.0.0...v1.0.1) (2026-06-02)
+
+
+### Bug Fixes
+
+* add MIT license ([#14](https://github.com/skillrig/cli/issues/14)) ([346bce0](https://github.com/skillrig/cli/commit/346bce0465fbaa058c4af82a4091e1dd67a6bc59))
+* **cli:** align search & verify table output ([#21](https://github.com/skillrig/cli/issues/21)) ([#22](https://github.com/skillrig/cli/issues/22)) ([b54d751](https://github.com/skillrig/cli/commit/b54d751963560b60e910b34d9ed9fb621c540716))
+
 ## 1.0.0 (2026-06-01)
 
 
