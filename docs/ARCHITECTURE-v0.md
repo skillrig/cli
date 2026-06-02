@@ -295,6 +295,17 @@ The CLI can *offer* to write the matching `mise.toml` stanza (helpful), but inst
 
 ### 8b. mise GitHub-backend realities (grounded) — and why release-please-per-binary is load-bearing
 
+> **Correction (2026-06-02, RFC 0001 + issue #23 validation).** Parts of this section are
+> superseded. (i) mise has **no `tag_regex`** — per-stream selection uses **`version_prefix`**
+> (a *leading*-prefix stripper only). (ii) The single-binary-per-entry *install collision* was
+> a **scheduler** dedup bug, **fixed in mise 2026.4.12 (PR #9093)**; co-installing multiple
+> binaries from one repo now works *for prefix or single-release shapes*. (iii) **But** a
+> strict-semver tag policy forces **build-metadata** streams (`v0.5.0+iii`), which SemVer
+> precedence collapses and `version_prefix` cannot select — so those remain natively
+> unresolvable, which is why the **`skillrig` mise backend plugin** is justified on capability.
+> See [`docs/rfcs/0001-mise-skillrig-backend.md`](rfcs/0001-mise-skillrig-backend.md) and the
+> spike under `specledger/013-mise-backend/`. The grounded prose below is retained for history.
+
 Verified against mise's GitHub backend docs (current as of early 2026). Three findings shape the template:
 
 **(1) The one-binary-per-entry limit — the constraint that shapes the origin's release strategy.** mise's GitHub backend installs **a single binary per tool entry**; it does **not** natively fetch multiple binaries from one release (confirmed: `mise use github:org/repo` installs only the first asset and skips the rest; the community workaround is a per-tool postinstall `curl` for extra assets). This collides with the naive reading of "one monorepo origin with several backing CLIs in `cmd/`" if that monorepo cuts **one release containing all binaries**. The resolution — and it happens to be the pattern already chosen for versioning hygiene — is **per-CLI tagged release streams via release-please** (`oxid-v1.4.0`, `foo-v2.1.0`, …) rather than one monolithic release. So:
