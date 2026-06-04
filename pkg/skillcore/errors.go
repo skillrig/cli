@@ -223,19 +223,19 @@ func ClassifyGitError(err *GitError) error {
 		"Invalid username or token",
 		// The origin required a credential we could not supply, and with prompts
 		// disabled (noninteractiveEnv, issue #25) git aborted instead of hanging.
-		// git emits "could not read Username/Password for '<url>': <reason>" — the
-		// <reason> tail is "terminal prompts disabled" (GIT_TERMINAL_PROMPT=0) or,
-		// on macOS, "Device not configured" (ENXIO reading /dev/tty). We anchor on
-		// the stable "could not read Username/Password" prefix (the full repro line
-		// includes it) plus the prompt-disabled message — NOT the bare "Device not
-		// configured" errno, which is generic and could appear outside a credential
-		// read. These carry no host/connect or "not found" anchor, so without this
-		// they would fall through to a raw, misleading *GitError; they are
-		// case-distinct from the "Could not read from remote repository"
-		// local-unreachable anchor below.
+		// git emits "could not read Username/Password for '<url>': <reason>", where
+		// the <reason> tail varies by platform — "terminal prompts disabled" with
+		// GIT_TERMINAL_PROMPT=0, macOS's "Device not configured" (ENXIO reading
+		// /dev/tty), a bare errno, etc. We anchor ONLY on the stable "could not read
+		// Username/Password" prefix, never the variable tail: that classifies every
+		// credential-read failure regardless of platform AND keeps a generic tail
+		// string (e.g. "Device not configured" / "terminal prompts disabled") seen
+		// OUTSIDE a credential read from being force-classified as auth. The prefix
+		// carries no host/connect or "not found" anchor (so without this it would
+		// fall through to a raw, misleading *GitError) and is case-distinct from the
+		// "Could not read from remote repository" local-unreachable anchor below.
 		"could not read Username",
 		"could not read Password",
-		"terminal prompts disabled",
 	):
 		return &AuthError{Cause: err}
 	case containsAny(

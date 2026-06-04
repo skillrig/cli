@@ -418,6 +418,14 @@ func TestClassifyGitError_StderrToTyped(t *testing.T) {
 			want:   classRaw,
 		},
 		{
+			// Same scope guard for the prompt-disabled tail: we anchor on the
+			// credential-read PREFIX, not this variable tail, so "terminal prompts
+			// disabled" on its own (no "could not read Username/Password") is NOT auth.
+			name:   "bare 'terminal prompts disabled' without a credential read stays raw",
+			stderr: "fatal: terminal prompts disabled",
+			want:   classRaw,
+		},
+		{
 			name:   "could not resolve host -> UnreachableError",
 			stderr: "fatal: unable to access 'https://github.com/...': Could not resolve host: github.com",
 			want:   classUnreachable,
