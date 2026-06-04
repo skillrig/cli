@@ -350,14 +350,16 @@ func mapNotFoundError(skill string, nf *skillcore.NotFoundError, cause error) er
 	}
 }
 
-// mapAuthError renders an *AuthError (a credential WAS presented and the origin
-// rejected it — distinct from the not-found-because-private class) as navigation.
-// Shared by add and search.
+// mapAuthError renders an *AuthError (the origin needs a credential that was
+// missing or rejected — distinct from the not-found-because-private class) as
+// navigation. It covers both a token that was presented and rejected AND the
+// case where no credential was available and git, run non-interactively, refused
+// to prompt (issue #25). Shared by add and search.
 func mapAuthError(origin string, cause error) error {
 	return &UsageError{
 		Msg: fmt.Sprintf("authentication failed reaching %s\n", origin) +
-			"why: the GitHub token presented was rejected (expired, revoked, or lacking access to a private origin)\n" +
-			"fix: refresh credentials with gh auth login, or set a valid GH_TOKEN / GITHUB_TOKEN",
+			"why: the origin needs a GitHub credential that was missing or rejected (no token resolved, or one that is expired, revoked, or lacking access to a private origin)\n" +
+			"fix: authenticate with gh auth login, or set a valid GH_TOKEN / GITHUB_TOKEN",
 		Cause: cause,
 	}
 }

@@ -966,13 +966,23 @@ func (c remoteConsumer) verify(t *testing.T, args ...string) runResult {
 	return run(t, runOpts{args: append([]string{"verify"}, args...), cwd: c.root})
 }
 
+// probeFileEnv is the env var naming a file the fake git writes the
+// GIT_TERMINAL_PROMPT / GCM_INTERACTIVE values it received into, so a test can
+// prove skillrig forced the REAL git child non-interactive (issue #25) — an
+// end-to-end check independent of how the CLI renders --verbose. When unset (the
+// existing failure tests) the shim writes nothing.
+const probeFileEnv = "SKILLRIG_GIT_ENV_PROBE"
+
 // fakeGitBin writes a `git` shim into a fresh dir and returns the dir, for
 // prepending to the binary's PATH. The shim passes EVERY git invocation through
 // to the real git EXCEPT `clone`, which it fails with the crafted (exit 128,
 // stderr) — the integration analog of pkg/skillcore's commandContext stub seam.
 // gitToplevel (rev-parse) still succeeds, so the failure surfaces precisely at
 // the remote fetch's clone phase (the catalog gate), letting the CLI render the
-// auth/unreachable/not-found class distinctly.
+// auth/unreachable/not-found class distinctly. When $SKILLRIG_GIT_ENV_PROBE names
+// a file, the clone branch first records the non-interactive env it was handed
+// there (issue #25 regression probe) — to a file, not stderr, so it never
+// perturbs the CLI prose the failure tests assert.
 func fakeGitBin(t *testing.T, stderr string) string {
 	t.Helper()
 
@@ -983,11 +993,16 @@ func fakeGitBin(t *testing.T, stderr string) string {
 
 	dir := t.TempDir()
 
-	// For `clone` (the first positional arg), emit the crafted stderr and exit
-	// 128; otherwise exec the real git with all args. The crafted stderr is
-	// single-quoted in the heredoc-free script, so it must contain no single quote.
+	// For `clone` (the first positional arg): optionally record the
+	// non-interactive env the child was handed (issue #25 probe), emit the crafted
+	// stderr, and exit 128; otherwise exec the real git with all args. The crafted
+	// stderr is single-quoted, so it must contain no single quote.
 	script := "#!/bin/sh\n" +
 		"if [ \"$1\" = clone ]; then\n" +
+		"  if [ -n \"$" + probeFileEnv + "\" ]; then\n" +
+		"    printf 'GIT_TERMINAL_PROMPT=[%s] GCM_INTERACTIVE=[%s]\\n' " +
+		"\"$GIT_TERMINAL_PROMPT\" \"$GCM_INTERACTIVE\" > \"$" + probeFileEnv + "\"\n" +
+		"  fi\n" +
 		"  printf '%s\\n' " + shellQuote(stderr) + " 1>&2\n" +
 		"  exit 128\n" +
 		"fi\n" +
@@ -1003,6 +1018,19 @@ func fakeGitBin(t *testing.T, stderr string) string {
 // shellQuote single-quotes s for POSIX sh, escaping embedded single quotes.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// fakeGhBin writes a `gh` shim into dir (alongside the fake git) that always
+// exits non-zero, so ResolveGitHubToken's gh-fallback tier yields no token — the
+// hermetic "no credential anywhere" state of a CI runner, without invoking (or
+// depending on) a real authenticated gh. Used by the remote-origin (Local=false)
+// scenario, where the token chain actually runs.
+func fakeGhBin(t *testing.T, dir string) {
+	t.Helper()
+
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
 }
 
 // addWithFakeGit runs `skillrig add <skill>` against the remote origin with the
@@ -1022,6 +1050,39 @@ func (c remoteConsumer) addWithFakeGit(t *testing.T, stderr string, args ...stri
 			"PATH":            binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
 		},
 	})
+}
+
+// cmdWithProbedGit runs `skillrig <sub> args...` against the remote origin with
+// the fake git (failing clones) prepended to PATH AND a probe file in the env, so
+// the shim records the non-interactive env skillrig handed the real git child. It
+// returns the run result plus the recorded env (issue #25 — proving the child was
+// forced non-interactive end-to-end). search's per-call catalog fetch and add's
+// convention-gate fetch both clone the origin, so a single helper covers both
+// commands (the issue names search AND add). The probe file path travels via the
+// process env, so skillrig passes it through to the git child unchanged.
+func (c remoteConsumer) cmdWithProbedGit(t *testing.T, sub, stderr string, args ...string) (runResult, string) {
+	t.Helper()
+
+	binDir := fakeGitBin(t, stderr)
+	probeFile := filepath.Join(t.TempDir(), "git-env-probe")
+
+	res := run(t, runOpts{
+		args: append([]string{sub}, args...),
+		cwd:  c.root,
+		env: map[string]string{
+			"SKILLRIG_ORIGIN": c.cloneURL,
+			"PATH":            binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+			probeFileEnv:      probeFile,
+		},
+	})
+
+	// Absent file → empty probe; assertGitForcedNonInteractive fails clearly.
+	gitEnv := ""
+	if data, err := os.ReadFile(probeFile); err == nil {
+		gitEnv = string(data)
+	}
+
+	return res, gitEnv
 }
 
 // TestQuickstart_AddRemoteNoLocalCopy (US2) — given a file:// origin and NO local
@@ -1404,6 +1465,159 @@ func TestQuickstart_AddPrivateNotFoundHintsAuth(t *testing.T) {
 	if !strings.Contains(res.stderr, "authenticate") {
 		t.Errorf("private-not-found should add the 'if private, authenticate' hint, got:\n%s", res.stderr)
 	}
+}
+
+// promptArtifactStderr is the issue #25 reproduction: macOS git, reaching a
+// private origin with no usable credential and unable to prompt, aborts the clone
+// with this exact line. It must classify as an AuthError, never leak raw to the
+// user, and never hang. (Under GIT_TERMINAL_PROMPT=0 the tail reads "terminal
+// prompts disabled" instead; both are covered by the unit classification table.)
+const promptArtifactStderr = "fatal: could not read Username for 'https://github.com': Device not configured"
+
+// assertUnauthenticatedPromptIsAuth asserts a clone that failed because a
+// credential was required but unavailable (prompts disabled, issue #25) is
+// rendered as a fast, structured AuthError — exit 1, empty stdout, the
+// what/why/fix prose pointing at authentication — and that the raw git
+// credential-prompt artifact is NOT the user-facing message (the issue's core
+// complaint). Asserted on a NON-verbose run (the raw cause is verbose-only).
+func assertUnauthenticatedPromptIsAuth(t *testing.T, res runResult) {
+	t.Helper()
+
+	if res.exit != 1 {
+		t.Fatalf("unauthenticated-prompt failure exit = %d, want 1 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	if res.stdout != "" {
+		t.Errorf("error path must keep stdout empty, got: %q", res.stdout)
+	}
+
+	// Classified as authentication — distinct from unreachable, and actionable.
+	assertContains(t, "what", res.stderr, "authentication failed")
+
+	if strings.Contains(res.stderr, "could not reach") {
+		t.Errorf("a credential-prompt failure must not render as unreachable, got:\n%s", res.stderr)
+	}
+
+	// The raw "could not read Username" / "Device not configured" artifact must
+	// NOT be the user-facing message — that misleading surface was the whole bug.
+	for _, leak := range []string{"could not read Username", "Device not configured"} {
+		if strings.Contains(res.stderr, leak) {
+			t.Errorf("raw git artifact %q leaked into the (non-verbose) user message, got:\n%s", leak, res.stderr)
+		}
+	}
+
+	// The fix points at authenticating.
+	if !strings.Contains(res.stderr, "gh auth login") &&
+		!strings.Contains(res.stderr, "GH_TOKEN") &&
+		!strings.Contains(res.stderr, "GITHUB_TOKEN") {
+		t.Errorf("auth-failure fix should point at gh auth login / GH_TOKEN / GITHUB_TOKEN, got:\n%s", res.stderr)
+	}
+}
+
+// assertGitForcedNonInteractive asserts the fake git's probe file recorded that
+// skillrig handed the real git child the prompt-disabling env — the other half of
+// issue #25: an unauthenticated fetch fails fast instead of blocking on a prompt
+// or reading /dev/tty. gitEnv is the probe file contents (empty if the clone
+// never ran or the env was absent).
+func assertGitForcedNonInteractive(t *testing.T, gitEnv string) {
+	t.Helper()
+
+	if !strings.Contains(gitEnv, "GIT_TERMINAL_PROMPT=[0]") {
+		t.Errorf("git child was not handed GIT_TERMINAL_PROMPT=0 — an unauthenticated fetch could "+
+			"prompt/hang (issue #25); probe = %q", gitEnv)
+	}
+
+	if !strings.Contains(gitEnv, "GCM_INTERACTIVE=[Never]") {
+		t.Errorf("git child was not handed GCM_INTERACTIVE=Never (issue #25); probe = %q", gitEnv)
+	}
+}
+
+// TestQuickstart_SearchUnauthenticatedPrivateFailsFastAsAuth (issue #25, US1) —
+// the issue's PRIMARY repro: `skillrig search` against a private origin with no
+// usable credential. The catalog fetch's clone fails with the credential-prompt
+// artifact; search must render a fast AuthError (not the raw "Device not
+// configured" dead-end), exit 1, and the probe proves the real git child was
+// forced non-interactive so a no-TTY CI job never hangs.
+func TestQuickstart_SearchUnauthenticatedPrivateFailsFastAsAuth(t *testing.T) {
+	t.Parallel()
+
+	o := newRemoteOrigin(t)
+	c := newRemoteConsumer(t, o)
+
+	res, gitEnv := c.cmdWithProbedGit(t, "search", promptArtifactStderr)
+
+	assertUnauthenticatedPromptIsAuth(t, res)
+	assertGitForcedNonInteractive(t, gitEnv)
+}
+
+// TestQuickstart_AddUnauthenticatedPrivateFailsFastAsAuth (issue #25, US2) — the
+// same contract over `skillrig add`: an unauthenticated private fetch is a fast,
+// structured AuthError pointing at gh auth login, and the git child is forced
+// non-interactive (no prompt, no hang). The clone fails at the convention gate
+// before any subtree is fetched or written.
+func TestQuickstart_AddUnauthenticatedPrivateFailsFastAsAuth(t *testing.T) {
+	t.Parallel()
+
+	o := newRemoteOrigin(t)
+	c := newRemoteConsumer(t, o)
+
+	res, gitEnv := c.cmdWithProbedGit(t, "add", promptArtifactStderr, sampleSkill)
+
+	assertUnauthenticatedPromptIsAuth(t, res)
+	assertGitForcedNonInteractive(t, gitEnv)
+
+	// Nothing written: the fast failure leaves no .agents/ or .skillrig/ behind.
+	if _, err := os.Stat(filepath.Join(c.root, ".agents")); !os.IsNotExist(err) {
+		t.Errorf(".agents/ must not exist after a failed remote add, stat err = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(c.root, ".skillrig")); !os.IsNotExist(err) {
+		t.Errorf(".skillrig/ must not exist after a failed remote add, stat err = %v", err)
+	}
+}
+
+// TestQuickstart_SearchRemoteGitHubUnauthenticatedFailsFastAsAuth (issue #25,
+// US1, the Local=false path) — the issue's LITERAL repro: a REMOTE OWNER/REPO
+// (github) origin with no local checkout and NO resolvable credential
+// (GH_TOKEN/GITHUB_TOKEN unset, gh yields nothing). Unlike the file:// tests
+// above (Local=true, which skip ResolveGitHubToken), this drives the remote
+// dispatch end-to-end: the token chain runs, finds nothing, and the
+// unauthenticated HTTPS clone aborts at the credential-read step. It proves the
+// token resolution + non-interactive env + auth classification compose on the
+// REAL github transport, not just the file:// substrate. Offline: the fake git
+// (on PATH) fails the clone before any network call.
+func TestQuickstart_SearchRemoteGitHubUnauthenticatedFailsFastAsAuth(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+
+	// A consumer repo with NO <root>/my-org/my-skills checkout, so the remote
+	// OWNER/REPO origin (Local=false) takes the HTTPS-fetch path.
+	root := t.TempDir()
+	git(t, root, "init", "-q", "-b", "main")
+
+	binDir := fakeGitBin(t, promptArtifactStderr)
+	fakeGhBin(t, binDir) // gh yields no token → fully unauthenticated
+	probeFile := filepath.Join(t.TempDir(), "git-env-probe")
+
+	res := run(t, runOpts{
+		args: []string{"search"},
+		cwd:  root,
+		env: map[string]string{
+			// originRepo ("my-org/my-skills") is the REMOTE OWNER/REPO form → Local=false.
+			"SKILLRIG_ORIGIN": originRepo,
+			"PATH":            binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+			probeFileEnv:      probeFile,
+		},
+	})
+
+	assertUnauthenticatedPromptIsAuth(t, res)
+
+	gitEnv := ""
+	if data, err := os.ReadFile(probeFile); err == nil {
+		gitEnv = string(data)
+	}
+
+	assertGitForcedNonInteractive(t, gitEnv)
 }
 
 // TestQuickstart_AddRemoteConventionMismatch (FIX-4/H1) — a file:// origin whose

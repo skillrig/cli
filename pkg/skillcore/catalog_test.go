@@ -389,6 +389,43 @@ func TestClassifyGitError_StderrToTyped(t *testing.T) {
 			want:   classAuth,
 		},
 		{
+			// Issue #25's exact macOS symptom: a private origin reached with no
+			// usable credential, git unable to prompt → must NOT fall through to a
+			// raw *GitError. Carries no host/connect or "not found" anchor.
+			name:   "could not read Username / Device not configured -> AuthError (issue #25)",
+			stderr: "fatal: could not read Username for 'https://github.com': Device not configured",
+			want:   classAuth,
+		},
+		{
+			// The same situation under GIT_TERMINAL_PROMPT=0 (CI / no TTY): git's
+			// own "terminal prompts disabled" message.
+			name:   "could not read Username / terminal prompts disabled -> AuthError (issue #25)",
+			stderr: "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+			want:   classAuth,
+		},
+		{
+			name:   "could not read Password -> AuthError",
+			stderr: "fatal: could not read Password for 'https://x@github.com': terminal prompts disabled",
+			want:   classAuth,
+		},
+		{
+			// Scope guard: the bare "Device not configured" errno, WITHOUT a
+			// credential-read prefix, must NOT be force-classified as auth — it is a
+			// generic ENXIO that can arise outside a credential read. Only the
+			// "could not read Username/Password" prefix (above) makes it auth.
+			name:   "bare 'Device not configured' without a credential read stays raw",
+			stderr: "fatal: write error: Device not configured",
+			want:   classRaw,
+		},
+		{
+			// Same scope guard for the prompt-disabled tail: we anchor on the
+			// credential-read PREFIX, not this variable tail, so "terminal prompts
+			// disabled" on its own (no "could not read Username/Password") is NOT auth.
+			name:   "bare 'terminal prompts disabled' without a credential read stays raw",
+			stderr: "fatal: terminal prompts disabled",
+			want:   classRaw,
+		},
+		{
 			name:   "could not resolve host -> UnreachableError",
 			stderr: "fatal: unable to access 'https://github.com/...': Could not resolve host: github.com",
 			want:   classUnreachable,

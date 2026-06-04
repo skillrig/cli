@@ -22,6 +22,34 @@ tree-SHA recomputation, and fetching skills over git).
 go build -o skillrig .
 ```
 
+## Authentication
+
+skillrig fetches origins over **HTTPS** with a **read-only** token (there is no
+write credential in the binary). It resolves one automatically, first match wins:
+
+```
+GH_TOKEN  >  GITHUB_TOKEN  >  gh auth token
+```
+
+**The supported, tested path is a completed `gh auth login`.** Do that once and
+private origins just work — no env var to manage:
+
+```sh
+gh auth login          # one-time; gh auth token then supplies the read-only credential
+```
+
+- **Public origins need no credential** at all.
+- **CI / headless:** set `GH_TOKEN` (or `GITHUB_TOKEN`) to a read-only token — `gh`
+  need not be installed.
+- **No interactive prompts, ever.** If an origin is private and no token is
+  available, skillrig fails fast with an `authentication failed` error (pointing at
+  `gh auth login` / `GH_TOKEN`) instead of hanging on a username prompt — safe for
+  no-TTY CI. The token is injected via git's `http.extraHeader` through the
+  environment, so it never appears in the clone URL or a process listing.
+- **SSH-key origins are not supported yet** — every origin is `OWNER/REPO` fetched
+  over HTTPS. SSH is a roadmap item ([`docs/ROADMAP.md`](docs/ROADMAP.md)); until
+  then, HTTPS-token (via `gh auth`) is the only tested transport.
+
 ## The workflow
 
 Most consumers follow one path — bind an origin once, then discover, vendor, and

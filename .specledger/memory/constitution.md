@@ -1,5 +1,22 @@
 <!--
   Sync Impact Report
+  Version change: 2.2.0 → 2.3.0 (amendment — 2026-06-04, resolves issue #25 review)
+    Amended section:
+      - §III Testing tiers — formalized a THREE-tier taxonomy (unit → integration → e2e).
+        The prior two-tier wording conflated the quickstart suite (real binary, STUBBED
+        substrate) with "E2E". Now: Integration (quickstart) is the acceptance tier
+        (TestQuickstart_*, file://-or-fake-git substrate, runs in make test/CI), and E2E
+        (true-substrate) is a NEW distinct tier (TestE2E_* in test/e2e/, e2e build tag, a
+        real git http-backend + auth gate, opt-in via `make test-e2e`, excluded from CI)
+        that proves real credential authentication (issue #25). Establishes TestE2E_* as
+        the e2e-tier naming, distinct from TestQuickstart_*.
+    Downstream sync:
+      - Qodo compliance rule 782315 (integration-test naming) updated to scope
+        TestQuickstart_* to the integration tier and recognize TestE2E_* for test/e2e/.
+      - Makefile (make test-e2e), CLAUDE.md, AGENTS.md, README, docs/ROADMAP.md already
+        carry the e2e tier (issue #25 PR #30).
+    No principle changes.
+  ---
   Version change: 2.1.1 → 2.2.0 (amendment — 2026-06-01, resolves issue #10)
     Added principle:
       X. User-Facing Documentation Co-Evolution (new) — when feature work changes CLI
@@ -101,13 +118,25 @@ skillrig's integration boundaries and their ground-truth sources:
 - **GitHub** — a real API/PR response on the `bump --pr` path, scrubbed of tokens.
 - **index.json** — generated from a real `skills/*/SKILL.md` frontmatter walk (`skillrig index`), not authored by hand.
 
-**Testing tiers:**
-- **Unit:** mocked/recorded boundaries via the `pkg/skillcore` git **exec-stub seam**
-  (`commandContext`) — skillrig shells `git`, so the fetch/integrity boundary is the
-  `git` exec, not an HTTP API; **no `httptest`/go-vcr**. Remote fetch is exercised over a
-  `file://` bare-repo substrate — for fast, deterministic, offline tests.
-- **E2E:** full `skillrig` binary invocation against a fixture origin, validating
-  real output and exit codes. E2E tests carry the §II output-shape assertions.
+**Testing tiers** (unit → integration → e2e; each tier adds realism the tier below stubs):
+- **Unit:** presentation-free logic in `internal/...` + `pkg/...`, with mocked/recorded
+  boundaries via the `pkg/skillcore` git **exec-stub seam** (`commandContext`) — skillrig
+  shells `git`, so the fetch/integrity boundary is the `git` exec, not an HTTP API; **no
+  `httptest`/go-vcr**.
+- **Integration (quickstart) — the acceptance tier:** `TestQuickstart_*` in `test/`
+  (package `quickstart`), building & exec'ing the real binary against a **stubbed
+  substrate** — a `file://` bare-repo origin, or a fake `git` injected on `PATH` — so the
+  tests stay fast, deterministic, and OFFLINE. Each maps 1:1 to a `quickstart.md` scenario
+  (§II) and carries the §II output-shape assertions; this tier runs in `make test` / CI.
+- **E2E (true-substrate):** `TestE2E_*` in `test/e2e/` behind the `e2e` build tag,
+  exec'ing the real binary against a **real external substrate** the stubbed tiers cannot
+  fake — e.g. a real `git http-backend` behind a real `Authorization` gate, to prove the
+  credential path actually AUTHENTICATES (issue #25). It is deliberately NOT a
+  quickstart-contract test (it maps to no `quickstart.md` scenario), so it is named
+  `TestE2E_*` — **not** `TestQuickstart_*` — to mark it a distinct tier. It is opt-in via
+  `make test-e2e`, EXCLUDED from `make test` / CI (a real-substrate dependency must never
+  gate the offline suite), and is the loop-closing required check for any change to the
+  fetch / auth / git-transport path.
 
 Checkpoint validation MUST verify spec-matches-ground-truth, not only
 code-matches-spec.
@@ -270,4 +299,4 @@ be justified against Principles VI, VII, and VIII. The binding CLI design contra
 is [docs/design/cli.md](../../docs/design/cli.md); changes to CLI behavior must
 remain consistent with it.
 
-**Version**: 2.2.0 | **Ratified**: 2026-05-24 | **Last Amended**: 2026-06-01
+**Version**: 2.3.0 | **Ratified**: 2026-05-24 | **Last Amended**: 2026-06-04
