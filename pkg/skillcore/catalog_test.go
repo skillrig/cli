@@ -726,3 +726,94 @@ metadata:
 		t.Errorf("ParseManifest metadata.x-skillrig lift mismatch:\n got = %+v\nwant = %+v", got, want)
 	}
 }
+
+// oneSkillCatalog renders a minimal one-skill index.json whose sole skill is
+// named `skill`. Both branches in bareOriginWithBranch share the SAME `origin`
+// (as a real catalog does) and differ only by this skill — so the test's
+// discriminator is the catalog CONTENT a real fetch returns, not a per-branch
+// marker (review feedback: avoid a tautological assertion).
+func oneSkillCatalog(skill string) string {
+	return `{"skillrigConvention":1,"origin":"my-org/my-skills","skills":[` +
+		`{"name":"` + skill + `","version":"1.0.0","namespace":"my-org",` +
+		`"description":"d","topics":[],"path":"skills/` + skill + `"}]}` + "\n"
+}
+
+// bareOriginWithBranch builds a real bare git origin whose DEFAULT branch (main)
+// and a NON-DEFAULT branch (feature) carry the SAME origin but DIFFERENT skills
+// (skill-on-main vs skill-on-feature), and returns the bare repo path. It is the
+// file:// substrate the constitution §III sanctions for exercising the
+// remote-fetch boundary offline.
+func bareOriginWithBranch(t *testing.T) string {
+	t.Helper()
+
+	work := t.TempDir()
+	runGit(t, work, "init", "-q", "-b", "main")
+	writeFile(t, work, "index.json", 0o644, oneSkillCatalog("skill-on-main"))
+	runGit(t, work, "add", "-A")
+	runGit(t, work, "commit", "-q", "-m", "main catalog")
+
+	runGit(t, work, "checkout", "-q", "-b", "feature")
+	writeFile(t, work, "index.json", 0o644, oneSkillCatalog("skill-on-feature"))
+	runGit(t, work, "add", "-A")
+	runGit(t, work, "commit", "-q", "-m", "feature catalog")
+	runGit(t, work, "checkout", "-q", "main")
+
+	bare := filepath.Join(t.TempDir(), "origin.git")
+	runGit(t, work, "clone", "-q", "--bare", ".", bare)
+
+	return bare
+}
+
+// TestFetchCatalog_NonDefaultBranchRef pins the @branch regression: an origin
+// pinned to a NON-DEFAULT branch (OWNER/REPO@feature) must fetch THAT branch's
+// catalog. The bug was that a fresh clone leaves a non-default branch only as
+// refs/remotes/origin/<branch>, so `git show <branch>:index.json` failed with
+// "invalid object name" and search/add broke for any @branch origin. The
+// discriminator is the branch-specific SKILL (not a marker field), and the
+// default branch is also asserted so the fix is shown not to regress it.
+func TestFetchCatalog_NonDefaultBranchRef(t *testing.T) {
+	t.Parallel()
+
+	bare := bareOriginWithBranch(t)
+	repoURL := "file://" + bare
+
+	cases := []struct {
+		ref       string
+		wantSkill string
+	}{
+		{ref: "feature", wantSkill: "skill-on-feature"}, // the bug: a non-default branch
+		{ref: "main", wantSkill: "skill-on-main"},       // the always-worked default branch
+		{ref: "HEAD", wantSkill: "skill-on-main"},       // the no-@ref default (FetchCatalog maps "" → HEAD)
+	}
+
+	for _, tc := range cases {
+		t.Run("ref="+tc.ref, func(t *testing.T) {
+			t.Parallel()
+
+			cat, err := FetchCatalog(t.Context(), CatalogRequest{
+				RepoURL: repoURL,
+				Origin:  "o/r@" + tc.ref,
+				Ref:     tc.ref,
+				Local:   true,
+			})
+			if err != nil {
+				t.Fatalf("FetchCatalog @%s: unexpected error: %v", tc.ref, err)
+			}
+
+			if len(cat.Skills) != 1 || cat.Skills[0].Name != tc.wantSkill {
+				t.Errorf("FetchCatalog @%s skills = %v, want exactly [%s] (wrong branch's catalog)",
+					tc.ref, catalogSkillNames(cat), tc.wantSkill)
+			}
+		})
+	}
+}
+
+// catalogSkillNames projects a catalog's skills to their names for assertions.
+func catalogSkillNames(cat Catalog) []string {
+	names := make([]string, len(cat.Skills))
+	for i, s := range cat.Skills {
+		names[i] = s.Name
+	}
+
+	return names
+}
