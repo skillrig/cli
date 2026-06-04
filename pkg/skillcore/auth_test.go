@@ -123,3 +123,87 @@ func TestClone_TokenInjectionViaEnv(t *testing.T) {
 		}
 	}
 }
+
+// TestRunEnv_AlwaysNonInteractive pins issue #25's core invariant: EVERY git
+// child carries GIT_TERMINAL_PROMPT=0 + GCM_INTERACTIVE=Never, so an
+// unauthenticated private-origin fetch fails fast instead of hanging on a
+// username prompt (CI, no stdin) or emitting a "Device not configured" TTY
+// artifact (macOS). The regression it guards: the non-interactive env was
+// conditional on a non-empty per-call env, so an UNAUTHENTICATED clone (empty
+// token → no auth env) got no override at all and git was free to prompt. Here
+// the prompt-disable must hold whether or not a token is injected, and the auth
+// triple must ride ON TOP when one is.
+func TestRunEnv_AlwaysNonInteractive(t *testing.T) {
+	t.Parallel()
+
+	const (
+		repoURL    = "https://github.com/my-org/private-skills"
+		destDir    = "/tmp/skillrig-dest"
+		wantPrompt = "GIT_TERMINAL_PROMPT=0"
+		// GIT_ASKPASS="" disables the askpass GUI path (e.g. VS Code's), which
+		// GIT_TERMINAL_PROMPT=0 alone does not — git tries askpass first (issue #25).
+		wantAskpass = "GIT_ASKPASS="
+		wantGCM     = "GCM_INTERACTIVE=Never"
+	)
+
+	// clone runs a stubbed Clone with the given token and returns the env the
+	// captured git child was handed.
+	clone := func(t *testing.T, token string) []string {
+		t.Helper()
+
+		var (
+			captured [][]string
+			cmds     []*exec.Cmd
+		)
+
+		c := &gitClient{commandContext: captureCommandContext(&captured, &cmds)}
+
+		if err := c.Clone(context.Background(), repoURL, destDir, token); err != nil {
+			t.Fatalf("Clone (stubbed): unexpected error: %v", err)
+		}
+
+		if len(cmds) != 1 {
+			t.Fatalf("Clone issued %d git invocations, want exactly 1", len(cmds))
+		}
+
+		return cmds[0].Env
+	}
+
+	t.Run("unauthenticated clone (empty token) is still non-interactive", func(t *testing.T) {
+		t.Parallel()
+
+		env := clone(t, "")
+
+		for _, want := range []string{wantPrompt, wantAskpass, wantGCM} {
+			if !slices.Contains(env, want) {
+				t.Errorf("unauthenticated clone env missing %q — git could still prompt/hang on a "+
+					"private origin (issue #25); got:\n%v", want, env)
+			}
+		}
+
+		// No credential must be injected when no token was resolved.
+		for _, v := range env {
+			if strings.HasPrefix(v, "GIT_CONFIG_VALUE_0=Authorization") {
+				t.Errorf("unauthenticated clone injected a credential (%q); want none", v)
+			}
+		}
+	})
+
+	t.Run("authenticated clone layers the token on top of the non-interactive env", func(t *testing.T) {
+		t.Parallel()
+
+		const token = "TKN"
+
+		env := clone(t, token)
+
+		wantB64 := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
+		wantAuth := "GIT_CONFIG_VALUE_0=Authorization: Basic " + wantB64
+
+		for _, want := range []string{wantPrompt, wantAskpass, wantGCM, wantAuth} {
+			if !slices.Contains(env, want) {
+				t.Errorf("authenticated clone env missing %q (the token must layer ON TOP of the "+
+					"non-interactive env, not replace it); got:\n%v", want, env)
+			}
+		}
+	})
+}

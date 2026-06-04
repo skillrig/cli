@@ -18,7 +18,9 @@ apply to remotely-fetched content too.
   - **Remote `OWNER/REPO`** (the common case) — `add` **fetches** the skill subtree directly
     from `github.com/OWNER/REPO@ref` over `git` (sparse checkout). Nothing needs to be checked
     out locally. A private origin needs a **read-only** token, resolved automatically via
-    `GH_TOKEN` > `GITHUB_TOKEN` > `gh auth token` (so `gh auth login` once is enough).
+    `GH_TOKEN` > `GITHUB_TOKEN` > `gh auth token` (so `gh auth login` once is enough). The fetch
+    runs `git` **non-interactively**: with no usable token it fails fast as an `AuthError` —
+    it never prompts for a username or hangs a no-TTY CI job.
   - **Local filesystem path** — if the configured origin is a real path, `add` reads that
     local checkout (no network). This is the generalized 002 behavior.
 - **`--pin <ref>` — vendor a specific immutable version** (remote path). A bare semver
@@ -64,7 +66,7 @@ the *committed* tree.
 | Symptom (stderr) | Cause | Fix |
 |------------------|-------|-----|
 | `no origin configured` | no `SKILLRIG_ORIGIN` / project / global origin | `skillrig init --origin OWNER/REPO`, or set `SKILLRIG_ORIGIN` |
-| `authentication ... failed` (**AuthError**) | private origin, no/invalid token | `gh auth login`, or export a `GH_TOKEN`/`GITHUB_TOKEN` with read access. **Not** a typo'd repo — the name resolved fine |
+| `authentication ... failed` (**AuthError**) | private origin, no/invalid token (incl. CI with no credential — fails fast, never prompts) | `gh auth login`, or export a `GH_TOKEN`/`GITHUB_TOKEN` with read access. **Not** a typo'd repo — the name resolved fine |
 | `... is unreachable` (**UnreachableError**) | network failure / wrong host | check connectivity/proxy and the host in the origin reference; retry |
 | `origin "<OWNER/REPO>" not found` (**NotFoundError**) | origin repo missing **or** a private repo with no token (GitHub reports both as "not found") | check the spelling; **if private, authenticate** (`gh auth login` / `GITHUB_TOKEN`) — that's the common cause |
 | `no version "<ref>" of "<skill>"` (**NoSuchVersionError**) | a `--pin` that resolves to no tag/ref | list the published versions, or drop `--pin` to take the tip. Distinct from "skill not found" |
@@ -75,6 +77,9 @@ the *committed* tree.
 | bad/missing args | wrong invocation | the error states what/why/fix + an example; or `skillrig add --help` |
 
 These failure classes are **distinct on purpose** — auth vs unreachable vs not-found vs
-no-such-version each point at a different fix; don't treat them as one. All failures state
-what/why/fix and exit `1`; add `--verbose` for the raw cause. Errors go to stderr, data to
-stdout.
+no-such-version each point at a different fix; don't treat them as one. One nuance: a
+**private origin with no credential** may surface as **either** `AuthError` (git aborted at
+the credential step — the fetch is non-interactive, so it never prompts/hangs) **or**
+`NotFoundError` with the authenticate hint (GitHub answers a private repo as "not found");
+both share the same fix — authenticate. All failures state what/why/fix and exit `1`; add
+`--verbose` for the raw cause. Errors go to stderr, data to stdout.

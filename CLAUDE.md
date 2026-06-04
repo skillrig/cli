@@ -27,11 +27,14 @@ make build              # go build -o skillrig .
 make test               # full suite (unit + integration; no network)
 make test-unit          # unit tests only        -> ./internal/...
 make test-integration   # quickstart acceptance   -> ./test/... (builds & execs the binary)
+make test-e2e           # TRUE-AUTH e2e (-tags e2e) -> ./test/e2e (real git http-backend + token gate)
 make lint               # golangci-lint (v2 config in .golangci.yml)
 make check              # pre-merge gate: fmt + vet + lint + test
 ```
 
 The test tiers map to the package layout (constitution §III): presentation-free unit tests in `internal/...`, and the `TestQuickstart_*` acceptance suite in `test/` that builds the real binary and execs it. Run a single test directly, e.g. `go test ./internal/config -run TestParseOrigin`. `mise.toml` only provisions the `crit` review tool, not build tooling.
+
+> **True-auth e2e is the loop-closing check (`make test-e2e`).** The `test/e2e` suite (build tag `e2e`, **excluded from `make check` and CI** by design) stands up a real `git http-backend` behind a real token gate and drives the real binary at it over the HTTPS `http.extraHeader` path. Unlike the stub tiers (fake git / `file://`), it actually validates the credential — a missing/wrong token gets a real 401. **Any change touching the fetch, token-resolution, or git-transport path is not "done" until `make test-e2e` is green.** It needs `git` (with `git-http-backend`) on PATH; no network, no Docker. See `test/e2e/doc.go`. The supported, tested origin transport is **HTTPS + a read-only token** (`gh auth` done, or `GH_TOKEN`/`GITHUB_TOKEN`); SSH origins are a roadmap item, not implemented or tested.
 
 ## Architecture: two layers, one hard rule
 

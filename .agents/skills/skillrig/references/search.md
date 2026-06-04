@@ -34,7 +34,9 @@ results always reflect the origin's current tip. It resolves the active origin t
 shared resolver (`SKILLRIG_ORIGIN` > project `.skillrig/config.toml` > global) and checks the
 origin's convention version before reading. A **remote** origin is fetched over `git` (a
 private one uses the auto-resolved read-only token); a **local-path** origin is read with no
-network.
+network. The fetch runs `git` **non-interactively** — if it's a private origin and no token
+is available, `search` fails fast with an `AuthError` (it never prompts for a username or
+hangs a no-TTY CI job).
 
 ## Output
 
@@ -65,9 +67,14 @@ network.
 |------------------|-------|-----|
 | `no origin configured` | no resolvable origin | `skillrig init --origin OWNER/REPO`, or set `SKILLRIG_ORIGIN` |
 | `... is unreachable` (**UnreachableError**) | network failure / wrong host | check connectivity/proxy/host; retry |
-| `authentication ... failed` (**AuthError**) | private origin, no/invalid token | `gh auth login`, or export `GH_TOKEN`/`GITHUB_TOKEN` |
+| `authentication ... failed` (**AuthError**) | private origin, no/invalid token (incl. CI with no credential — fails fast, never prompts) | `gh auth login`, or export `GH_TOKEN`/`GITHUB_TOKEN` |
 | `origin "<OWNER/REPO>" not found` (**NotFoundError**) | origin missing, or private with no token | check spelling; **if private, authenticate** |
 | `origin ... uses convention version N` | origin layout unsupported by this binary | update `skillrig` or use a compatible origin |
+
+A **private origin with no credential** can surface as **either** an `AuthError` (git aborted
+at the credential step — the common case now that the fetch is non-interactive) **or** a
+`NotFoundError` with the authenticate hint (GitHub answered a clean 404 that masks a private
+repo). They are two faces of one cause and the fix is identical: authenticate.
 
 All failures state what/why/fix and exit `1`; `--verbose` shows the raw cause. Errors to
 stderr, data to stdout (so `skillrig search --json 2>/dev/null | jq .` stays clean).

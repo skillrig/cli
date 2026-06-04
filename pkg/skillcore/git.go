@@ -28,23 +28,28 @@ func newGitClient() *gitClient {
 
 // run invokes git with args, capturing stdout and stderr into buffers. On a
 // non-zero exit it returns a *GitError carrying the exit code and trimmed
-// stderr; on success it returns the trimmed stdout. It inherits the parent
-// environment unchanged (no credential injection — see runEnv for that).
+// stderr; on success it returns the trimmed stdout. It carries no credential
+// (see runEnv for that) but is still forced non-interactive, like every git
+// invocation (noninteractiveEnv).
 func (c *gitClient) run(ctx context.Context, args ...string) (string, error) {
 	return c.runEnv(ctx, nil, args...)
 }
 
-// runEnv is run with extra environment variables. When env is non-empty it is
-// appended to the parent environment — the seam that injects a GitHub credential
-// via git's GIT_CONFIG_* vars (authConfigEnv) so the token lands in the process
-// ENVIRON, never argv (gh-cli keeps the token out of argv too; a `-c
-// http.extraHeader=...` flag would be visible in `ps`). When env is empty cmd.Env
-// is left as the command context set it (nil in production → the child inherits
-// the parent env unchanged).
+// runEnv runs git with two layers of environment on top of the parent env:
+//
+//   - noninteractiveEnv, applied to EVERY invocation, forces git to fail fast
+//     instead of prompting for credentials (issue #25 — an unauthenticated
+//     private-origin fetch must never hang CI or read from /dev/tty);
+//   - env (optional), the per-call extras — today the GitHub credential injected
+//     via git's GIT_CONFIG_* vars (authConfigEnv) so the token lands in the
+//     process ENVIRON, never argv (gh-cli keeps the token out of argv too; a `-c
+//     http.extraHeader=...` flag would be visible in `ps`).
 //
 // The base for the append is any cmd.Env the command context already populated,
 // falling back to os.Environ() when it left it nil; this both yields the real
 // parent env in production AND preserves an env the test seam pre-set on the cmd.
+// Duplicate keys are resolved last-wins by os/exec's env dedup, so the appended
+// GIT_TERMINAL_PROMPT=0 overrides any inherited value.
 func (c *gitClient) runEnv(ctx context.Context, env []string, args ...string) (string, error) {
 	var stdout, stderr bytes.Buffer
 
@@ -52,13 +57,13 @@ func (c *gitClient) runEnv(ctx context.Context, env []string, args ...string) (s
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if len(env) > 0 {
-		if cmd.Env == nil {
-			cmd.Env = os.Environ()
-		}
-
-		cmd.Env = append(cmd.Env, env...)
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
 	}
+
+	// Non-interactive first (every invocation), then any per-call auth env on top.
+	cmd.Env = append(cmd.Env, noninteractiveEnv()...)
+	cmd.Env = append(cmd.Env, env...)
 
 	if err := cmd.Run(); err != nil {
 		// A non-zero git exit surfaces as *exec.ExitError carrying the code;
@@ -109,6 +114,37 @@ func (c *gitClient) statusPorcelain(gitDir, relPath string) (string, error) {
 		"status", "--porcelain",
 		"--", relPath,
 	)
+}
+
+// noninteractiveEnv returns the environment variables that force a git child to
+// run NON-INTERACTIVELY, so a missing or rejected credential fails fast with a
+// structured error rather than blocking on a username/password prompt — whether
+// that prompt would come from the terminal, a GUI askpass helper, or Git
+// Credential Manager (issue #25 — an unauthenticated private-origin fetch must not
+// hang CI or pop a credential dialog):
+//
+//   - GIT_TERMINAL_PROMPT=0 disables git's own terminal credential prompt;
+//   - GIT_ASKPASS="" disables the askpass program path. This is load-bearing: git
+//     invokes GIT_ASKPASS (or core.askpass / SSH_ASKPASS) BEFORE the terminal, so
+//     GIT_TERMINAL_PROMPT=0 alone does NOT stop a prompt when the environment
+//     exports an askpass GUI helper — VS Code's integrated terminal sets
+//     GIT_ASKPASS to its own dialog, and inheriting it pops an interactive prompt.
+//     A set-but-empty GIT_ASKPASS short-circuits the whole askpass chain (it does
+//     not fall through to core.askpass or SSH_ASKPASS) and, via os/exec's
+//     last-wins env dedup, overrides any inherited value;
+//   - GCM_INTERACTIVE=Never disables Git Credential Manager's GUI/TTY prompt.
+//
+// It deliberately leaves credential HELPERS intact: a non-interactive helper
+// (osxkeychain, a cached PAT) still answers — that is a separate mechanism from
+// askpass — so a user whose only auth is a configured helper is not broken; only
+// the interactive fallbacks are removed. runEnv applies this to EVERY git
+// invocation and layers authConfigEnv on top.
+func noninteractiveEnv() []string {
+	return []string{
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_ASKPASS=",
+		"GCM_INTERACTIVE=Never",
+	}
 }
 
 // authConfigEnv returns the GIT_CONFIG_* environment variables (git >=2.31) that

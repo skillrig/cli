@@ -93,13 +93,17 @@ func (e *GitError) Error() string {
 	return fmt.Sprintf("git failed (exit %d): %s", e.ExitCode, e.Stderr)
 }
 
-// AuthError is returned when a remote fetch fails authentication against the
-// origin — git reported "Authentication failed" or "Invalid username or token".
-// It is distinct from *NotFoundError (which GitHub returns for a private repo
-// when NO token was resolved): an AuthError means a credential WAS presented but
-// rejected. Origin is the OWNER/REPO[@REF] reference being reached.
-// Presentation-free: the CLI renders the what/why/fix prose. Cause carries the
-// raw *GitError, surfaced under --verbose.
+// AuthError is returned when a remote fetch cannot authenticate against the
+// origin — either a credential was presented and REJECTED (git reported
+// "Authentication failed" / "Invalid username or token") or the origin REQUIRED
+// a credential that was unavailable and, with prompts disabled (issue #25), git
+// could not obtain one ("could not read Username/Password", "terminal prompts
+// disabled", or macOS's "Device not configured"). Both are the documented
+// "private origin, no/invalid token" class. It is distinct from *NotFoundError
+// (which GitHub returns for a private repo when it answers a clean 404). Origin
+// is the OWNER/REPO[@REF] reference being reached. Presentation-free: the CLI
+// renders the what/why/fix prose. Cause carries the raw *GitError, surfaced
+// under --verbose.
 type AuthError struct {
 	Origin string
 	Cause  error
@@ -213,7 +217,26 @@ func ClassifyGitError(err *GitError) error {
 	stderr := err.Stderr
 
 	switch {
-	case containsAny(stderr, "Authentication failed", "Invalid username or token"):
+	case containsAny(
+		stderr,
+		"Authentication failed",
+		"Invalid username or token",
+		// The origin required a credential we could not supply, and with prompts
+		// disabled (noninteractiveEnv, issue #25) git aborted instead of hanging.
+		// git emits "could not read Username/Password for '<url>': <reason>" — the
+		// <reason> tail is "terminal prompts disabled" (GIT_TERMINAL_PROMPT=0) or,
+		// on macOS, "Device not configured" (ENXIO reading /dev/tty). We anchor on
+		// the stable "could not read Username/Password" prefix (the full repro line
+		// includes it) plus the prompt-disabled message — NOT the bare "Device not
+		// configured" errno, which is generic and could appear outside a credential
+		// read. These carry no host/connect or "not found" anchor, so without this
+		// they would fall through to a raw, misleading *GitError; they are
+		// case-distinct from the "Could not read from remote repository"
+		// local-unreachable anchor below.
+		"could not read Username",
+		"could not read Password",
+		"terminal prompts disabled",
+	):
 		return &AuthError{Cause: err}
 	case containsAny(
 		stderr,
