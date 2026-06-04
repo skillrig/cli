@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/skillrig/cli/compare/v1.0.1...v1.0.2) (2026-06-04)
+
+
+### Bug Fixes
+
+* **auth:** force git non-interactive on private-origin fetch ([#30](https://github.com/skillrig/cli/issues/30)) ([3456441](https://github.com/skillrig/cli/commit/3456441fc7d7d58ca5d6329a85f5410887197e09))
+
 ## [1.0.1](https://github.com/skillrig/cli/compare/v1.0.0...v1.0.1) (2026-06-02)
 
 
