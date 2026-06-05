@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/skillrig/cli/compare/v1.0.3...v1.1.0) (2026-06-05)
+
+
+### Features
+
+* **005:** add `skillrig show` for a human-friendly full skill view ([#19](https://github.com/skillrig/cli/issues/19)) ([13cc35f](https://github.com/skillrig/cli/commit/13cc35fbcc6320b21a279b848369a7cb83eacae5))
+
 ## [1.0.3](https://github.com/skillrig/cli/compare/v1.0.2...v1.0.3) (2026-06-05)
 
 
