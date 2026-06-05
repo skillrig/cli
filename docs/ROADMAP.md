@@ -58,6 +58,10 @@ resolver — AP-04 / AP-06) and layers thin commands on top.
 
 ## v1 — governance + ergonomics (once usage justifies)
 
+- **mise backend integration — CLI side (RFC 0001 P1 + P3).** The [`skillrig/mise-skillrig`](https://github.com/skillrig/mise-skillrig) backend plugin now ships and consumes origins **convention-driven** (it derives stream/asset/checksum names from the goreleaser convention `<bin>_<ver>_<os>_<arch>.tar.gz` + `<bin>_checksums.txt` and reads the binary from each tag's build metadata) — so it needs **no** origin-side schema to work. This roadmap item makes that resolution **metadata-driven and auto-wired** from `skillrig/cli`:
+  - **P1 — origin metadata contract (optional override, not a prerequisite).** Add a convention-versioned **`[[binaries]]`** block to `.skillrig-origin.toml` and **emit it into `index.json`** from `skillrig index` (stream selector + asset template + checksum filename + per-os/arch platform map). The plugin prefers this metadata when present and falls back to the convention otherwise. One contract, two readers (plugin + CLI) — AP-04.
+  - **P3 — `skillrig add` auto-wiring.** When `add` vendors a skill whose `metadata.x-skillrig.requires` names a binary sourced from the origin, write the matching `skillrig:<owner>/<repo>/<bin>` entry (+ version constraint) into the consumer's `mise.toml`, under the same dry-run/force discipline as `add`. Replaces the rejected "template stamps per-tool `tag_regex`" idea (§8b open-Q15 — `tag_regex` does not exist).
+  - Requires **mise ≥ 2026.4.12** (the install-scheduler fix, PR #9093) on consumers. See [`docs/rfcs/0001-mise-skillrig-backend.md`](rfcs/0001-mise-skillrig-backend.md) §5/§7/§12 and the spike under `specledger/013-mise-backend/`.
 - **Audit mode** `doctor --audit`: classify on-disk skills as OK / policy-violation / orphan (§9b).
 - **External-source allowlist** with graded allowance levels (blocked / advisory / approved / pinned-only), enforced in `doctor` as a deterministic offline lookup (R27, §9b).
 - **Risk-signal surfacing** (e.g. Snyk) — advisory, human-facing, online-only, behind a swappable provider interface; **never** in `verify` (R29, §9b).
@@ -73,7 +77,7 @@ resolver — AP-04 / AP-06) and layers thin commands on top.
 
 Each is justified only if its trigger fires; recorded here so they aren't silently assumed.
 
-- **skillrig pulls backing binaries itself (skills + CLIs in one fetch).** *Trigger:* mise's one-binary-per-release limit + `tag_regex` fiddliness (§8b) proves painful enough to own. *Tension:* re-absorbs the binary-provisioning job deliberately delegated to mise (R17) — needs a real pain signal, plus cross-OS/arch asset selection, checksum/SLSA verification, and a cache.
+- **skillrig pulls backing binaries itself (skills + CLIs in one fetch).** *Trigger:* the mise-delegated path proves painful enough to own. *Status update:* the multi-binary-from-one-monorepo gap is now solved **out-of-process** by the **[`skillrig/mise-skillrig`](https://github.com/skillrig/mise-skillrig) backend plugin** (built & validated; RFC 0001), so this vNext item's trigger has **not** fired — mise (via the plugin) still installs. *Tension (unchanged):* owning the fetch re-absorbs the job delegated to mise (R17) — needs a real pain signal, plus cross-OS/arch asset selection, checksum/SLSA verification, and a cache.
 - **Convention contract v2+** — evolving the origin contract (§2d, R5e); requires the v0 convention-version mechanism already in place.
 - **MCP surface for agents** — expose `verify`/`search` as MCP tools; MUST dispatch to the same `skillcore` (§2), never a parallel implementation.
 - **Client-tier differentiation** (strict/enterprise vs. lean) — a *deployment* concern layered on the same architecture (private-Pages on/off, `doctor` auth strictness, auto-merge policy, risk-score hard-gating per D6), not a requirements change (D4, §10).

@@ -10,6 +10,11 @@ repo collapsed into a single tool. This spike answers the issue's four open ques
 the prior `ARCHITECTURE-v0 §8b` claims, to decide **whether** to build the plugin and, if
 so, the contract it depends on.
 **Time-box**: ~45 min (web + docs).
+**Outcome (2026-06-05)**: spike conclusion **confirmed by implementation** — the
+[`skillrig/mise-skillrig`](https://github.com/skillrig/mise-skillrig) plugin was built and
+validated end-to-end against a real origin (two CLIs co-installed from one monorepo as
+distinct, independently-versioned tools). See RFC 0001 (`docs/rfcs/0001-mise-skillrig-backend.md`)
+for the as-built design and the four RFC↔implementation divergences folded back in.
 
 ## Question
 

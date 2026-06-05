@@ -1,14 +1,30 @@
 # RFC 0001 — The `skillrig` mise backend plugin
 
-**Status:** Draft for review
+**Status:** ✅ **Accepted — plugin BUILT, published, and validated end-to-end (2026-06-05).**
+**Plugin repo:** [`skillrig/mise-skillrig`](https://github.com/skillrig/mise-skillrig) (public)
 **Author:** generated from issue [#23](https://github.com/skillrig/cli/issues/23)
 **Spike:** [`specledger/013-mise-backend/research/2026-06-02-mise-backend-plugin.md`](../../specledger/013-mise-backend/research/2026-06-02-mise-backend-plugin.md)
 **Relates to:** `docs/ARCHITECTURE-v0.md` §8 (backing-CLI provisioning), §8b (mise realities), §13 vNext
-**Bootstraps:** a **new, separate repository** — `skillrig/mise-skillrig` (the plugin is Lua, not Go; it does **not** live in `skillrig/cli`)
+**Bootstrapped:** the separate **`skillrig/mise-skillrig`** repo (the plugin is Lua, not Go; it does **not** live in `skillrig/cli`)
 
 > **Scope note (pre-release marker, per `CLAUDE.md`).** No backward compatibility is planned.
-> This RFC defines a new artifact and a new convention-versioned origin contract; it may
-> change freely until it ships.
+> This RFC defines a new artifact and an (optional) convention-versioned origin contract; it
+> may change freely.
+
+> **Implementation status (2026-06-05).** The plugin specified here is **built and validated**:
+> two backing CLIs co-installed from one private monorepo as distinct, independently-versioned
+> tools — the capability native mise cannot provide. Verified with 54 offline unit tests,
+> `stylua` + `lua-language-server` clean, CI green on ubuntu + macOS, an adversarial
+> multi-lens review, and a live two-tool co-install. **§5–§8 and §12 below have been
+> reconciled with what actually shipped** — the four divergences are called out inline as
+> *“Shipped:”* notes. Quickstart:
+> ```sh
+> mise settings experimental=true
+> mise plugin install skillrig https://github.com/skillrig/mise-skillrig
+> export MISE_GITHUB_TOKEN=$(gh auth token)
+> mise use skillrig:my-org/our-skills/jira@1.7.0
+> mise use skillrig:my-org/our-skills/tfc@latest   # two tools, one repo, distinct versions
+> ```
 
 ---
 
@@ -22,19 +38,30 @@ delegated to **mise** (`ARCHITECTURE-v0` §8 / R17 — *"skillrig declares and v
 installs"*).
 
 This RFC specifies a **mise backend plugin** named `skillrig` so that N backing CLIs in one
-origin become N **distinct** mise tools, addressed `skillrig:<tool>@<version>`, each tracking
-its own independent release stream:
+origin become N **distinct** mise tools, addressed `skillrig:<owner>/<repo>/<bin>@<version>`,
+each tracking its own independent release stream:
 
 ```toml
 # consumer mise.toml
-"skillrig:iii"     = "latest"
-"skillrig:console" = "0.2.0"
+"skillrig:my-org/our-skills/jira" = "1.7.0"
+"skillrig:my-org/our-skills/tfc"  = "latest"   # two tools, one repo, distinct versions
 ```
 
-It is a separate, independently-released repo. This document also defines the **origin-side
-contract** (a convention-versioned `[[binaries]]` block) the plugin depends on, and the
-changes to the **origin template** and **`skillrig` CLI** that make the three pieces work
-together.
+> **Shipped (divergence #2):** the GitHub coordinate is embedded **in the address**
+> (`skillrig:<owner>/<repo>/<bin>`), not a bare `skillrig:<bin>` plus a separate `origin`
+> option. A bare `skillrig:<bin>` + an `origin` option / `SKILLRIG_ORIGIN` env also works as a
+> shorthand. This avoids per-tool `origin` config and matches the origin's
+> `docs/BINARY-DISTRIBUTION.md` §4.
+
+It is a separate, independently-released repo. This document also defines an **optional
+origin-side contract** (a convention-versioned `[[binaries]]` block) and the changes to the
+**origin template** and **`skillrig` CLI** that make the three pieces work together.
+
+> **Shipped (divergence #1):** the `[[binaries]]` block is **not required**. The plugin is
+> **convention-driven** — it derives stream/asset/checksum names from the goreleaser
+> convention and reads the binary from each tag's build metadata, so it works against an
+> origin that has **no** `[[binaries]]` block. The block (P1, §5/§12) is an *optional
+> metadata-driven override*, not a prerequisite.
 
 ## 2. Motivation — why native mise is not enough *for this origin*
 
@@ -120,31 +147,42 @@ cannot do. That is the capability justification for this plugin.
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-1. **Origin template** ships the release pipeline that produces per-stream tags + assets +
-   `checksums.txt`, *and* the `[[binaries]]` metadata describing them (§5).
-2. **The plugin** reads that metadata to resolve/install each tool (§6).
+1. **Origin template** ships the release pipeline that produces per-stream build-metadata tags
+   (`1.7.0+jira`) + `<bin>_<ver>_<os>_<arch>.tar.gz` assets + per-tool `<bin>_checksums.txt`;
+   optionally the `[[binaries]]` metadata describing them (§5, P1).
+2. **The plugin** resolves/installs each tool — convention-driven, preferring `[[binaries]]`
+   metadata when present (§6).
 3. **The `skillrig` CLI** auto-wires the consumer's `mise.toml` when a vendored skill requires
-   a binary, and reuses its own origin resolution + token resolver (§7).
+   a binary, and reuses its own origin resolution + token resolver (§7, RFC P3).
 
-## 5. The origin-side contract (`[[binaries]]`) — OQ2
+## 5. The origin-side contract (`[[binaries]]`) — OQ2 — **optional override (P1)**
 
-The per-binary stream + asset conventions do **not** exist in the origin metadata today. We
-add them as a **convention-versioned** block in `.skillrig-origin.toml`, mirrored into the
-generated `index.json` so the plugin can fetch a single file. This is `skillrig/cli` +
-origin-template work, shared by the plugin and any native-stanza generator (AP-04 — one
-contract, many readers).
+> **Shipped (divergence #1 & #3).** The plugin does **not** need this block. It is
+> **convention-driven**, deriving everything from the goreleaser release convention the origin
+> template already produces:
+> - **Tags** are `<core>+<bin>` — **no leading `v`**, build metadata is the **bare tool
+>   name**: real tags are `1.7.0+jira`, `0.0.6+tfc` (the §-examples below previously wrote
+>   `v0.5.0+iii`; corrected here). Prefix streams `<bin>-v<core>` are also supported.
+> - **Assets** are `<bin>_<ver>_<os>_<arch>.tar.gz`.
+> - **Checksums** are **per-tool** `<bin>_checksums.txt` (e.g. `jira_checksums.txt`), **not** a
+>   single shared `checksums.txt`.
+>
+> The `[[binaries]]` block below is therefore the **P1 metadata-driven override** — adopt it
+> when an origin diverges from the convention or wants explicit control; the plugin prefers it
+> when present and falls back to the convention otherwise. One contract, two readers (plugin +
+> CLI) — AP-04.
 
 ```toml
-# .skillrig-origin.toml  (origin repo root)
+# .skillrig-origin.toml  (origin repo root) — OPTIONAL
 skillrig-convention = 1
-origin = "my-org/my-skills"
+origin = "foo-org-sports/local-devops-scripts"   # identity LABEL — see divergence #4 below
 
 [[binaries]]
-name      = "iii"                 # → mise tool name `skillrig:iii`
-stream    = "+iii"                # semver BUILD-METADATA suffix identifying this stream
-asset     = "iii_{version}_{os}_{arch}.tar.gz"   # {version}=semver core, {os}/{arch} mapped
-checksums = "checksums.txt"       # asset in the same release; sha256 <sp> filename lines
-bin       = "iii"                 # executable path inside the archive (post strip)
+name      = "jira"                # → mise tool `skillrig:<owner>/<repo>/jira`
+stream    = "+jira"               # semver BUILD-METADATA suffix (bare tool name; no leading v on tags)
+asset     = "jira_{version}_{os}_{arch}.tar.gz"   # {version}=semver core, {os}/{arch} mapped
+checksums = "jira_checksums.txt"  # PER-TOOL checksums asset; sha256 <sp> filename lines
+bin       = "jira"                # executable path inside the archive (post strip)
 
   # optional: map mise RUNTIME tokens → this asset's tokens (defaults: linux/darwin, amd64/arm64)
   [binaries.platforms.linux-x64]
@@ -155,36 +193,45 @@ bin       = "iii"                 # executable path inside the archive (post str
   arch = "arm64"
 
 [[binaries]]
-name   = "console"
-stream = "+console"
-asset  = "console_{version}_{os}_{arch}.tar.gz"
-checksums = "checksums.txt"
-bin    = "console"
+name   = "tfc"
+stream = "+tfc"
+asset  = "tfc_{version}_{os}_{arch}.tar.gz"
+checksums = "tfc_checksums.txt"
+bin    = "tfc"
 ```
 
-`skillrig index` (already the catalog generator) emits the same data into `index.json`:
+> **Shipped (divergence #4): `origin` is an identity *label*, not the hosting coordinate.** The
+> demo origin's files say `origin = "foo-org-sports/local-devops-scripts"` while it is hosted
+> at `so0k/skillrig-origin-demo`. The plugin therefore keys off the **address coordinate**
+> (`skillrig:<owner>/<repo>/<bin>`) and verifies only `skillrigConvention` — it **never**
+> checks the origin name.
+
+When the override is present, `skillrig index` emits it into `index.json`:
 
 ```jsonc
 {
   "skillrigConvention": 1,
-  "origin": "my-org/my-skills",
+  "origin": "foo-org-sports/local-devops-scripts",   // identity label only
   "binaries": [
-    { "name": "iii", "stream": "+iii",
-      "asset": "iii_{version}_{os}_{arch}.tar.gz",
-      "checksums": "checksums.txt", "bin": "iii",
+    { "name": "jira", "stream": "+jira",
+      "asset": "jira_{version}_{os}_{arch}.tar.gz",
+      "checksums": "jira_checksums.txt", "bin": "jira",
       "platforms": { "linux-x64": {"os":"linux","arch":"amd64"}, "...": {} } }
   ],
   "skills": { /* unchanged */ }
 }
 ```
 
-**Convention versioning (R5e).** The plugin reads `skillrigConvention` and fails clearly
-against an incompatible origin rather than mis-resolving. v1 understands convention `1`.
+**Convention versioning (R5e).** The plugin best-effort-reads `skillrigConvention` from
+`index.json` (currently `1`) and fails clearly against an incompatible origin rather than
+mis-resolving. It **never** checks the origin **name** (divergence #4 — that field is an
+identity label that legitimately differs from the hosting coordinate).
 
 ## 6. The plugin — design (OQ1)
 
-**Repo / naming.** New repo **`skillrig/mise-skillrig`**; mise backend name `skillrig`
-(tools addressed `skillrig:<tool>`); the plugin name need not match the repo. Installed via
+**Repo / naming.** Repo **[`skillrig/mise-skillrig`](https://github.com/skillrig/mise-skillrig)**
+(public, shipped); mise backend name `skillrig`; tools addressed
+**`skillrig:<owner>/<repo>/<bin>`** (the plugin name need not match the repo). Installed via
 `mise plugin install skillrig https://github.com/skillrig/mise-skillrig` (or registered in the
 mise plugin registry for the short name). **Released on its own cadence**, independent of the
 `skillrig` CLI.
@@ -208,15 +255,21 @@ skillrig/mise-skillrig/
 └── README.md
 ```
 
-**Origin resolution (inside the plugin).** The plugin must know which origin to read.
-Precedence (mirrors the CLI for consistency):
-`ctx.options.origin` (per-tool in `mise.toml`) → `SKILLRIG_ORIGIN` env → error with a fix.
+**Origin resolution (inside the plugin).** The origin coordinate is normally **embedded in the
+address** (`skillrig:<owner>/<repo>/<bin>`), so no extra config is needed. For the bare
+`skillrig:<bin>` shorthand, precedence (mirrors the CLI): `ctx.options.origin` (per-tool in
+`mise.toml`) → `SKILLRIG_ORIGIN` env → error with a fix. (Recall: this `<owner>/<repo>` is the
+**hosting coordinate**, distinct from the origin's `origin` identity-label field — divergence
+#4.)
 
 ```toml
-# explicit per-tool origin (when not using SKILLRIG_ORIGIN)
-[tools."skillrig:iii"]
+# preferred: coordinate in the address (no per-tool origin config)
+"skillrig:my-org/our-skills/jira" = "1.7.0"
+
+# shorthand: bare tool + explicit origin
+[tools."skillrig:jira"]
 version = "latest"
-origin  = "my-org/my-skills"
+origin  = "my-org/our-skills"
 ```
 
 ### 6.1 `BackendListVersions` — the load-bearing hook
@@ -228,13 +281,12 @@ suffix, and returns clean semver cores ascending.
 ```lua
 -- hooks/backend_list_versions.lua
 function PLUGIN:BackendListVersions(ctx)
-  local meta   = origin.binary_meta(ctx.tool)          -- from index.json, by ctx.tool
-  local tags   = github.list_tags(origin.repo())        -- authed; e.g. {"v0.5.0+iii","v0.2.0+console"}
-  local stream = meta.stream                            -- "+iii"
+  local meta   = origin.binary_meta(ctx.tool)          -- coordinate+bin from the address; index.json optional
+  local tags   = github.list_tags(meta.repo)            -- authed; real tags e.g. {"1.7.0+jira","0.0.6+tfc"}
   local versions = {}
   for _, tag in ipairs(tags) do
-    local core, build = stream.parse(tag)               -- "0.5.0", "iii"  (strips leading v)
-    if build == stream.suffix(meta.stream) then         -- belongs to THIS stream
+    local core, build = stream.parse(tag)               -- "1.7.0", "jira"  (no leading v; bare tool name)
+    if build == meta.bin then                           -- build metadata == this tool's stream
       versions[#versions + 1] = core
     end
   end
@@ -252,22 +304,22 @@ cannot produce for build-metadata tags.
 -- hooks/backend_install.lua
 function PLUGIN:BackendInstall(ctx)
   local meta = origin.binary_meta(ctx.tool)
-  local tag  = "v" .. ctx.version .. meta.stream          -- "0.5.0" + "+iii" → "v0.5.0+iii"
-  local rel  = github.release_by_tag(origin.repo(), tag)  -- authed
+  local tag  = ctx.version .. "+" .. meta.bin             -- "1.7.0" + "+jira" → "1.7.0+jira" (no leading v)
+  local rel  = github.release_by_tag(meta.repo, tag)      -- authed
 
-  local plat = meta.platforms[RUNTIME.osType .. "-" .. RUNTIME.archType] or stream.default_plat()
-  local name = stream.render(meta.asset, {                -- "iii_0.5.0_linux_amd64.tar.gz"
-    version = ctx.version, os = plat.os, arch = plat.arch,
-  })
+  local plat = meta.platform()                            -- RUNTIME os/arch → asset tokens
+  local name = meta.asset(ctx.version, plat)              -- "jira_1.7.0_linux_amd64.tar.gz"
 
   local asset = github.find_asset(rel, name)
   local file  = github.download(asset, ctx.download_path)
 
-  -- checksum verify (mise does NOT verify for custom backends — the plugin must)
-  local sums  = github.download(github.find_asset(rel, meta.checksums), ctx.download_path)
+  -- checksum verify (mise does NOT verify for CUSTOM backends — the plugin must).
+  -- checksums asset is PER-TOOL: "<bin>_checksums.txt", e.g. "jira_checksums.txt".
+  local sums  = github.download(github.find_asset(rel, meta.bin .. "_checksums.txt"), ctx.download_path)
   checksum.verify_sha256(file, name, sums)                -- abort on mismatch
 
   archive.extract(file, ctx.install_path, { strip = "auto" })
+  -- normalize the binary into install_path/bin/<bin> so BackendExecEnv stays trivial
   return {}
 end
 ```
@@ -295,22 +347,25 @@ documenting either `MISE_GITHUB_TOKEN=$(gh auth token)` or a `credential_command
 reuses this resolver via mise's HTTP/token helpers; it introduces **no new credential
 surface** (consistent with `ARCHITECTURE-v0` §2b — no write credential anywhere).
 
-**`skillrig` CLI auto-wiring (in this repo, `skillrig/cli`).** When `skillrig add <skill>`
-vendors a skill whose `metadata.x-skillrig.requires` names a binary sourced from the origin,
-the CLI writes the matching `mise.toml` stanza:
+**`skillrig` CLI auto-wiring (in this repo, `skillrig/cli` — RFC P3).** When `skillrig add
+<skill>` vendors a skill whose `metadata.x-skillrig.requires` names a binary sourced from the
+origin, the CLI writes the matching `mise.toml` stanza, embedding the origin coordinate in the
+address (divergence #2):
 
 ```toml
-"skillrig:iii" = ">=0.4.0"     # from requires[].version
+"skillrig:my-org/our-skills/jira" = ">=0.4.0"     # from requires[].version
 ```
 
 This is the one piece of plugin support that belongs in the Go CLI (it owns `add`, origin
-resolution, and the lock). It is gated behind the same dry-run/force discipline as `add`.
+resolution, and the lock). It is gated behind the same dry-run/force discipline as `add`. See
+the roadmap entry "mise backend integration — CLI side" in `docs/ROADMAP.md`.
 
 ## 8. Verification depth (OQ3)
 
-- **v1 — checksum-only.** sha256 against the origin's `checksums.txt` (already published).
-  This matches what mise's native `github` backend offers, re-implemented in the plugin
-  because mise does not verify for custom backends.
+- **v1 — checksum-only (shipped).** sha256 against the origin's **per-tool**
+  `<bin>_checksums.txt`. mise performs **no** verification for a *custom* backend (unlike the
+  native `github` backend), so the plugin implements this itself — a `skillrig:` tool gets no
+  mise-side SLSA/GPG today regardless of native-backend support.
 - **v2 — provenance / treeSha parity.** Bind the binary's release tag/commit to the
   `treeSha`/`commit` the skill's lock entry already records, so a backing CLI is tamper-evident
   to the same standard as the skill that required it. Deferred behind a real trigger
@@ -320,17 +375,21 @@ resolution, and the lock). It is gated behind the same dry-run/force discipline 
 ## 9. Origin template changes
 
 The batteries-included template (`ARCHITECTURE-v0` §2d) gains:
-1. **Per-package release-please** config emitting **build-metadata** tags (`v<semver>+<name>`)
-   per CLI in `cmd/`, plus **goreleaser** producing `name_{version}_{os}_{arch}.tar.gz`
-   archives and a `checksums.txt` per release.
-2. A populated **`.skillrig-origin.toml` `[[binaries]]`** block (§5) and the `index.yml`
-   workflow regenerating `index.json` (binaries + skills) on merge.
+1. **Per-package release-please** config emitting **build-metadata** tags `<semver>+<bin>`
+   (e.g. `1.7.0+jira` — **no leading `v`**, build metadata is the **bare tool name**) per CLI
+   in `cmd/`, plus **goreleaser** producing `<bin>_<version>_<os>_<arch>.tar.gz` archives and a
+   **per-tool** `<bin>_checksums.txt` per release.
+2. *(Optional, P1)* a populated **`.skillrig-origin.toml` `[[binaries]]`** block (§5) and the
+   `index.yml` workflow regenerating `index.json` (binaries + skills) on merge — for
+   metadata-driven resolution. The plugin works without it (convention-driven).
 3. Docs: require **mise ≥ 2026.4.12** (Layer A), install the `skillrig` plugin, and set
-   `SKILLRIG_ORIGIN` / token. A worked `mise.toml` example.
+   `MISE_GITHUB_TOKEN` / `SKILLRIG_ORIGIN`. A worked `mise.toml` example using
+   `skillrig:<owner>/<repo>/<bin>` addressing.
 
 > If an adopting org *can* relax its tag policy, the template should note that **prefix
 > streams + `version_prefix`** (option (a)) work on stock mise with no plugin — the plugin is
-> the answer specifically for the **strict-semver + independent-versioning** org.
+> the answer specifically for the **strict-semver + independent-versioning** org. (The plugin
+> supports prefix streams `<bin>-v<core>` too.)
 
 ## 10. Alternatives considered
 
@@ -361,14 +420,21 @@ The batteries-included template (`ARCHITECTURE-v0` §2d) gains:
 
 ## 12. Phasing
 
-- **P0 (this RFC + spike):** decision recorded; `[[binaries]]` contract drafted; §8b corrected.
-- **P1 — origin contract:** implement `[[binaries]]` in `.skillrig-origin.toml` + `skillrig
-  index` emission + template release pipeline (build-metadata tags + checksums). *(in
-  `skillrig/cli` + origin template)*
-- **P2 — plugin v1:** bootstrap `skillrig/mise-skillrig`; three hooks; build-metadata stream
-  resolution; checksum verify; auth; tests against a fixture origin.
-- **P3 — CLI auto-wiring:** `skillrig add` writes `skillrig:<tool>` stanzas from `requires`.
-- **P4 (v2):** treeSha/provenance binding; SLSA; registry submission.
+- **P0 — RFC + spike — ✅ done.** decision recorded; §8b corrected.
+- **P2 — plugin v1 — ✅ done (out of order).** [`skillrig/mise-skillrig`](https://github.com/skillrig/mise-skillrig)
+  shipped: three hooks; build-metadata + prefix stream resolution; per-tool checksum verify;
+  auth; 54 unit tests; CI green ubuntu+macOS; validated against a **real** origin. Built
+  **convention-driven**, so it did **not** require P1 first.
+- **P1 — origin metadata contract (now an *optional enhancement*, the CLI next step) — ⬜.**
+  Tracked on the CLI roadmap (`docs/ROADMAP.md`, v1 "mise backend integration — CLI side"):
+  add the convention-versioned **`[[binaries]]`** block to `.skillrig-origin.toml`, **emit it
+  into `index.json`** from `skillrig index` (so resolution can be *metadata-driven* instead of
+  convention-only), and align the origin template's release pipeline (build-metadata tags +
+  per-tool `<bin>_checksums.txt`). The plugin prefers this metadata when present, else falls
+  back to the convention. *(in `skillrig/cli` + origin template)*
+- **P3 — CLI `add` auto-wiring — ⬜.** `skillrig add` writes `skillrig:<owner>/<repo>/<bin>`
+  stanzas into the consumer's `mise.toml` from each skill's `requires`. *(in `skillrig/cli`)*
+- **P4 (v2) — ⬜.** treeSha/provenance binding; SLSA; mise registry submission.
 
 ## References
 

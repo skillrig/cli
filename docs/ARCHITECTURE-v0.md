@@ -295,31 +295,43 @@ The CLI can *offer* to write the matching `mise.toml` stanza (helpful), but inst
 
 ### 8b. mise GitHub-backend realities (grounded) — and why release-please-per-binary is load-bearing
 
-> **Correction (2026-06-02, RFC 0001 + issue #23 validation).** Parts of this section are
-> superseded. (i) mise has **no `tag_regex`** — per-stream selection uses **`version_prefix`**
-> (a *leading*-prefix stripper only). (ii) The single-binary-per-entry *install collision* was
-> a **scheduler** dedup bug, **fixed in mise 2026.4.12 (PR #9093)**; co-installing multiple
-> binaries from one repo now works *for prefix or single-release shapes*. (iii) **But** a
-> strict-semver tag policy forces **build-metadata** streams (`v0.5.0+iii`), which SemVer
-> precedence collapses and `version_prefix` cannot select — so those remain natively
-> unresolvable, which is why the **`skillrig` mise backend plugin** is justified on capability.
+> **Correction (2026-06-05, RFC 0001 — plugin now BUILT & validated).** Parts of this
+> section are **superseded** by the shipped [`skillrig/mise-skillrig`](https://github.com/skillrig/mise-skillrig)
+> plugin, proven end-to-end co-installing two CLIs from one private monorepo. The prose below
+> is **retained for history**; where it conflicts, the following wins:
+> - **No `tag_regex` exists.** Every `tag_regex` mention below (and in §12 open-Q15 and the
+>   roadmap) is **outdated and must not be implemented**. Worse than a terminology slip: a
+>   per-tool `github:<repo>[tag_regex=…]` config **empirically cannot co-install** from a
+>   monorepo — mise keys a github-backend tool by `owner/repo` and tracks one version per tool,
+>   so all N entries collapse into a single install. The working mechanism is the **plugin's
+>   `BackendListVersions` owning version listing** (not `version_prefix`, which also cannot
+>   select build-metadata streams).
+> - **The install collision (single-binary-per-entry) was a *scheduler* dedup bug**, fixed in
+>   mise 2026.4.12 (PR #9093) — necessary but **not sufficient**: it does not touch version
+>   *resolution*. A strict-semver tag policy forces **build-metadata** streams (e.g.
+>   `1.7.0+jira`), which SemVer precedence collapses — natively unresolvable, which is the
+>   capability reason the plugin exists.
+> - **Finding (3)'s SLSA/GPG claim applies to the *native* github backend only, and is
+>   aspirational/unverified.** mise does **not** verify anything for a *custom* backend, so a
+>   `skillrig:` tool is **checksum-only (sha256) in v1**; SLSA/attestation is plugin-side v2.
+>
 > See [`docs/rfcs/0001-mise-skillrig-backend.md`](rfcs/0001-mise-skillrig-backend.md) and the
-> spike under `specledger/013-mise-backend/`. The grounded prose below is retained for history.
+> spike under `specledger/013-mise-backend/`.
 
 Verified against mise's GitHub backend docs (current as of early 2026). Three findings shape the template:
 
 **(1) The one-binary-per-entry limit — the constraint that shapes the origin's release strategy.** mise's GitHub backend installs **a single binary per tool entry**; it does **not** natively fetch multiple binaries from one release (confirmed: `mise use github:org/repo` installs only the first asset and skips the rest; the community workaround is a per-tool postinstall `curl` for extra assets). This collides with the naive reading of "one monorepo origin with several backing CLIs in `cmd/`" if that monorepo cuts **one release containing all binaries**. The resolution — and it happens to be the pattern already chosen for versioning hygiene — is **per-CLI tagged release streams via release-please** (`oxid-v1.4.0`, `foo-v2.1.0`, …) rather than one monolithic release. So:
 - **release-please-per-binary is not just nice versioning — it is what makes mise consumption work at all** while preserving co-location. State this in the template explicitly.
-- Because mise's `github:org/repo` shorthand tracks a repo's *latest release*, a monorepo with interleaved tag streams needs **per-tool tag filtering** (mise's version/tag-regex options) so each backing CLI tracks only its own prefix (`oxid-v*`). This is fiddly enough that **the template should generate the correct `mise.toml` stanza per backing CLI** — a concrete, valuable template job, not something each adopting org should reverse-engineer.
-- Rejected alternative: **separate repo per CLI** (`github:my-org/oxid`) is cleanest for mise (each tracks its own latest, no tag-regex), but it **breaks the co-location** that lets a skill and its CLI ship together — so it fights the design. Monorepo-with-tag-streams is the chosen path; see open question on exactly how the template stamps `tag_regex`.
+- Because mise's `github:org/repo` shorthand tracks a repo's *latest release*, a monorepo with interleaved tag streams needs **per-tool stream selection**. *(Superseded — see the correction above: there is no `tag_regex`, and the native option that does exist (`version_prefix`) cannot select build-metadata streams. Stream selection is now owned by the `skillrig/mise-skillrig` plugin's `BackendListVersions` hook.)*
+- Rejected alternative: **separate repo per CLI** (`github:my-org/oxid`) is cleanest for mise (each tracks its own latest), but it **breaks the co-location** that lets a skill and its CLI ship together — so it fights the design. Monorepo-with-per-stream-tags is the chosen path; the `skillrig` plugin (not any `tag_regex` config) makes it work.
 
 **(2) Auth resolution is well-defined and matches R18.** mise resolves a GitHub token from (in order) the **env vars first** (`MISE_GITHUB_TOKEN` / `GITHUB_TOKEN`), then `github.credential_command`, then `github_tokens.toml`, then gh CLI `hosts.yml`, then git credential fill. The **`credential_command`** hook (runs a shell command per host to fetch a token — 1Password/Vault/secret-manager friendly) is the clean **enterprise auth path**, and it's host-aware for GitHub Enterprise. In CI, `jdx/mise-action` uses `${{ github.token }}` by default, so private-repo fetches in the org's own Actions need no extra plumbing. This is the same git/token auth skillrig already relies on (R5b) — no new credential surface.
 
 > **Correction (S3, 2026-05-31).** An earlier draft of this section claimed mise's precedence put `github.credential_command` *highest* (above the env vars). That is inaccurate — mise reads the env vars first. This does **not** affect skillrig, which never uses mise's `credential_command` and resolves its own fetch token directly via `os.exec`: `GH_TOKEN` env → `GITHUB_TOKEN` env → `gh auth token --hostname <host>` (exit 0 + non-empty = token; non-zero or `gh`-absent = skip, not fatal). skillrig injects that token per fetch via `git -c http.extraHeader="Authorization: Basic <base64(x-access-token:TOKEN)>"` — **never** in the clone URL (avoids history/process-listing leakage). `git credential fill` is deferred (the `gh` path already covers the keyring tokens mise reads from `hosts.yml`); GitHub Enterprise is deferred behind the `hostname` seam of `ResolveGitHubToken(hostname string)`.
 
-**(3) mise can verify what it pulls.** mise supports optional **SLSA provenance verification** and **GPG asset verification** for github-backend tools. This complements skillrig's own posture: skillrig verifies the *skill* (tree SHA + approval), mise can verify the *backing binary* (SLSA/GPG) — layered supply-chain integrity, neither owning the other's job.
+**(3) mise can verify what it pulls — *for the native github backend only*.** mise is documented to support optional **SLSA provenance** and **GPG asset verification** for *native* `github`-backend tools (aspirational/unverified here). **Crucially, this does NOT extend to a custom backend:** mise performs no checksum/SLSA/GPG verification for `plugin:tool` installs, so a `skillrig:` tool's integrity is whatever the plugin implements. The shipped plugin is **checksum-only (sha256 vs the per-tool `<bin>_checksums.txt`) in v1**; SLSA/attestation is plugin-side **v2**. skillrig verifies the *skill* (tree SHA + approval); the plugin verifies the *backing binary* (checksum now, provenance later) — layered integrity, neither owning the other's job.
 
-> **Net:** the co-located-monorepo origin is viable through mise, but only via per-CLI tagged releases + per-tool tag filtering, with the template generating the config. The "one big release with all binaries" shape does **not** work with mise today.
+> **Net (revised):** the co-located-monorepo origin is viable, but for **build-metadata stream tags** under a strict-semver policy it works **only via the `skillrig/mise-skillrig` plugin**, not native mise config. The "one big release with all binaries" shape installs post-2026.4.12 but loses independent versioning. See RFC 0001.
 
 > **Reference design (from OpenClaw study):** OpenClaw's `openclaw skills list --eligible` is the closest prior art to `skillrig verify`'s prereq check — it filters to skills *actually runnable in the current environment*, treating "missing dependency or auth error" as the disqualifier. Adopt its shape: a skill is "eligible" iff every `[[requires]]` resolves (present + version satisfies) AND any private source is authenticable (R18). **`doctor`** (not `verify`) returns the eligible/ineligible partition with per-skill reasons — eligibility is a runtime-agent concern, not the content-integrity gate (§2). Study OpenClaw's dependency-declaration schema before finalizing the `[[requires]]` fields.
 
@@ -445,8 +457,8 @@ Recommendation to pressure-test: **Option B for the core, borrow `gh skill`'s cl
 11. **Skillset / bundle grouping** (from Skilldex) — should the skill **manifest** (`SKILL.md` frontmatter) support grouping a skill with its backing CLI + shared assets (vocab/templates/reference docs) as one coherently-versioned, co-vendored unit? Relevant to skills whose behavior depends on shared context. Likely v1.
 12. **Third scope tier?** (from Skilldex's global/shared/project) — is a "shared" tier (team-wide, multi-repo, not user-global) needed, or do project + global suffice for v0? (Leaning: two tiers for v0.)
 13. **`bump --pr` invocation policy** — enforce CI-only by token scoping so human agent sessions don't carry PR-create rights.
-14. **Origin convention versioning** (§2d, R5e) — where the `skillrig-convention` version lives (in `index.json`? a top-level `.skillrig-origin.toml`?), the compatibility policy (binary supports conventions N and N-1?), and how the template's release workflow stamps it. The contract surface is small now; pin it before the first external org adopts.
-15. **Template `mise.toml` generation for co-located CLIs** (§8b) — exactly how the template stamps per-tool `tag_regex`/version filters so each backing CLI in the monorepo tracks its own release stream, and whether to generate one shared `mise.toml` or per-skill stanzas keyed off each skill's `[[requires]]`.
+14. **Origin convention versioning** (§2d, R5e) — where the `skillrig-convention` version lives (in `index.json`? a top-level `.skillrig-origin.toml`?), the compatibility policy (binary supports conventions N and N-1?), and how the template's release workflow stamps it. *(Partially settled by the plugin: it best-effort-checks `skillrigConvention` from `index.json` (currently `1`) and deliberately **never** checks the origin **name** — that is an identity label that legitimately differs from the hosting coordinate. See RFC 0001 §6.)*
+15. **Template `mise.toml` generation for co-located CLIs** (§8b) — ~~how the template stamps per-tool `tag_regex`/version filters~~ **RESOLVED by the `skillrig/mise-skillrig` plugin** (RFC 0001): consumers address `skillrig:<owner>/<repo>/<bin>@<version>` and the plugin owns stream selection — no `tag_regex` (which does not exist) and no per-tool `mise.toml` filter generation. Open follow-up is the CLI's **`skillrig add` auto-wiring** of those `skillrig:` entries from each skill's `[[requires]]` (RFC 0001 P1/P3; see `docs/ROADMAP.md`).
 
 ---
 
@@ -482,7 +494,7 @@ The smallest thing that delivers the core promise ("the skill your agent runs is
 
 ### vNext — candidates needing a trigger
 Each only justified if its trigger fires; recorded so they aren't silently assumed.
-- **skillrig pulls backing binaries itself (skills + CLIs in one fetch).** *Trigger:* mise's one-binary-per-release limit + `tag_regex` fiddliness (§8b) proves painful enough that skillrig orchestrating a co-located skill+CLI fetch is worth owning. *Tension:* this partially re-absorbs the binary-provisioning job deliberately delegated to mise (R17) — so it needs a real pain signal, not just "it'd be neat." Would also mean owning cross-OS/arch asset selection, checksum/SLSA verification of binaries, and a cache — non-trivial surface.
+- **skillrig pulls backing binaries itself (skills + CLIs in one fetch).** *Status:* the multi-binary-from-one-monorepo gap is now solved out-of-process by the **[`skillrig/mise-skillrig`](https://github.com/skillrig/mise-skillrig)** backend plugin (built & validated; RFC 0001), so this trigger has **not** fired — mise (via the plugin) still installs. *Tension (unchanged):* owning the fetch re-absorbs the job delegated to mise (R17) — so it needs a real pain signal, not just "it'd be neat." Would also mean owning cross-OS/arch asset selection, checksum/SLSA verification of binaries, and a cache — non-trivial surface.
 - **Convention contract v2+** — evolving the origin contract (§2d, R5e) as conventions change; requires the v0 convention-version mechanism to already be in place.
 - **MCP surface for agents** — expose `verify`/`search` as MCP tools; must dispatch to the same `skillcore` (§2), never a parallel implementation.
 - **Client-tier differentiation** (strict/enterprise vs. lean) — a *deployment* concern layered on the same architecture (private-Pages on/off, `doctor` auth strictness, auto-merge policy, risk-score hard-gating per D6), not a requirements change (D4, §10).

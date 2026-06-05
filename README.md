@@ -251,3 +251,24 @@ origin = 'my-org/my-skills@staging'
 Unknown keys are ignored on read, so config added by later versions will not break this
 one. The full, extended `config.toml` structure is documented on the project docs
 website; see also [docs/design/cli.md](docs/design/cli.md) for the CLI design contract.
+
+## Backing CLIs (mise backend)
+
+A skill can require a backing CLI built in the same origin monorepo (`metadata.x-skillrig.requires`).
+`skillrig` itself never installs binaries — provisioning is delegated to [mise](https://mise.jdx.dev).
+For origins that ship **multiple** CLIs released on independent version streams, the
+**[`skillrig/mise-skillrig`](https://github.com/skillrig/mise-skillrig)** mise backend plugin
+lets you co-install them as distinct tools from one repo:
+
+```sh
+mise plugin install skillrig https://github.com/skillrig/mise-skillrig
+export MISE_GITHUB_TOKEN=$(gh auth token)
+mise use skillrig:my-org/our-skills/jira@1.7.0
+mise use skillrig:my-org/our-skills/tfc@latest   # two tools, one repo, distinct versions
+```
+
+This works where native mise cannot — independent versioning under a strict-semver
+(build-metadata) tag policy. The design rationale, the origin contract, and the planned
+`skillrig` CLI integration (metadata-driven resolution + `skillrig add` auto-wiring) are in
+[**RFC 0001**](docs/rfcs/0001-mise-skillrig-backend.md) and tracked in
+[docs/ROADMAP.md](docs/ROADMAP.md).
