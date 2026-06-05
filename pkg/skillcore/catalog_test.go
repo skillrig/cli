@@ -446,6 +446,13 @@ func TestClassifyGitError_StderrToTyped(t *testing.T) {
 			want:   classNotFound,
 		},
 		{
+			// A typo'd / nonexistent origin @ref: `git fetch origin <ref>` reports
+			// this (distinct from a missing REPO), so the CLI can point at the @ref.
+			name:   "couldn't find remote ref -> RefNotFoundError",
+			stderr: "fatal: couldn't find remote ref does-not-exist",
+			want:   classRefNotFound,
+		},
+		{
 			name:   "unrecognized stderr passes the raw *GitError through",
 			stderr: "fatal: early EOF",
 			want:   classRaw,
@@ -489,6 +496,7 @@ const (
 	classAuth
 	classUnreachable
 	classNotFound
+	classRefNotFound
 )
 
 func (c errClass) String() string {
@@ -499,6 +507,8 @@ func (c errClass) String() string {
 		return "UnreachableError"
 	case classNotFound:
 		return "NotFoundError"
+	case classRefNotFound:
+		return "RefNotFoundError"
 	case classRaw:
 		return "raw *GitError"
 	default:
@@ -511,9 +521,10 @@ func (c errClass) String() string {
 // wins — the network types are checked before falling through to raw.
 func classOf(err error) errClass {
 	var (
-		a *AuthError
-		u *UnreachableError
-		n *NotFoundError
+		a  *AuthError
+		u  *UnreachableError
+		n  *NotFoundError
+		rn *RefNotFoundError
 	)
 
 	switch {
@@ -523,6 +534,8 @@ func classOf(err error) errClass {
 		return classUnreachable
 	case errors.As(err, &n):
 		return classNotFound
+	case errors.As(err, &rn):
+		return classRefNotFound
 	default:
 		return classRaw
 	}
@@ -816,4 +829,42 @@ func catalogSkillNames(cat Catalog) []string {
 	}
 
 	return names
+}
+
+// TestFetchCatalog_NonexistentRef pins the typo'd-@ref UX (PR #32 review): an
+// origin pinned to a branch that does not exist (OWNER/REPO@does-not-exist) must
+// surface as an actionable *RefNotFoundError, NOT a raw *GitError. The explicit
+// `git fetch origin <ref>` the branch fix added is the authoritative failure point
+// for this (git: "couldn't find remote ref ..."); without classification the CLI
+// would dump the raw git failure instead of pointing at the @ref.
+func TestFetchCatalog_NonexistentRef(t *testing.T) {
+	t.Parallel()
+
+	bare := bareOriginWithBranch(t)
+
+	_, err := FetchCatalog(t.Context(), CatalogRequest{
+		RepoURL: "file://" + bare,
+		Origin:  "my-org/my-skills@does-not-exist",
+		Ref:     "does-not-exist",
+		Local:   true,
+	})
+
+	var refErr *RefNotFoundError
+	if !errors.As(err, &refErr) {
+		t.Fatalf("FetchCatalog @does-not-exist error = %T (%v), want *RefNotFoundError", err, err)
+	}
+
+	if refErr.Ref != "does-not-exist" {
+		t.Errorf("RefNotFoundError.Ref = %q, want %q", refErr.Ref, "does-not-exist")
+	}
+
+	if refErr.Origin != "my-org/my-skills@does-not-exist" {
+		t.Errorf("RefNotFoundError.Origin = %q, want the configured origin", refErr.Origin)
+	}
+
+	// The raw *GitError stays reachable for --verbose (errors-as-navigation).
+	var gitErr *GitError
+	if !errors.As(err, &gitErr) {
+		t.Errorf("RefNotFoundError does not unwrap to *GitError (--verbose would have nothing)")
+	}
 }

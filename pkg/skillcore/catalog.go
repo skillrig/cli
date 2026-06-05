@@ -126,9 +126,10 @@ func classifyCatalogError(req CatalogRequest, err error) error {
 	classified := ClassifyGitError(gitErr)
 
 	var (
-		authErr  *AuthError
-		unreach  *UnreachableError
-		notFound *NotFoundError
+		authErr     *AuthError
+		unreach     *UnreachableError
+		notFound    *NotFoundError
+		refNotFound *RefNotFoundError
 	)
 
 	switch {
@@ -138,6 +139,8 @@ func classifyCatalogError(req CatalogRequest, err error) error {
 		return &UnreachableError{Origin: req.Origin, Cause: gitErr}
 	case errors.As(classified, &notFound):
 		return &NotFoundError{Origin: req.Origin, Cause: gitErr}
+	case errors.As(classified, &refNotFound):
+		return &RefNotFoundError{Origin: req.Origin, Ref: req.Ref, Cause: gitErr}
 	default:
 		return classified
 	}

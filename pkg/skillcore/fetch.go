@@ -179,9 +179,10 @@ func classifyFetchError(req FetchRequest, authenticated bool, err error) error {
 	// (D4): GitHub reports "not found" (not 403) for a private repo reached
 	// without a token.
 	var (
-		authErr  *AuthError
-		unreach  *UnreachableError
-		notFound *NotFoundError
+		authErr     *AuthError
+		unreach     *UnreachableError
+		notFound    *NotFoundError
+		refNotFound *RefNotFoundError
 	)
 
 	switch {
@@ -196,6 +197,8 @@ func classifyFetchError(req FetchRequest, authenticated bool, err error) error {
 			Authenticated: authenticated,
 			Cause:         gitErr,
 		}
+	case errors.As(classified, &refNotFound):
+		return &RefNotFoundError{Origin: req.originRef(), Ref: req.Ref, Cause: gitErr}
 	default:
 		return classified
 	}

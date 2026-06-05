@@ -311,6 +311,11 @@ func mapAddError(skill, origin string, err error) error {
 		return mapConventionError(origin, convErr, err)
 	}
 
+	var refNotFound *skillcore.RefNotFoundError
+	if errors.As(err, &refNotFound) {
+		return mapRefNotFoundError(refNotFound.Origin, refNotFound.Ref, err)
+	}
+
 	var gitErr *skillcore.GitError
 	if errors.As(err, &gitErr) {
 		return &UsageError{
@@ -371,6 +376,20 @@ func mapUnreachableError(origin string, cause error) error {
 		Msg: fmt.Sprintf("could not reach %s\n", origin) +
 			"why: the origin host could not be resolved or connected to (offline, or a misspelled origin)\n" +
 			"fix: check your network connection and the origin spelling (OWNER/REPO)",
+		Cause: cause,
+	}
+}
+
+// mapRefNotFoundError renders a *RefNotFoundError (the origin is reachable but its
+// configured @ref — a branch/tag/commit — does not exist, usually a typo) as
+// navigation that points at the @ref, NOT the whole origin: the agent must not be
+// sent to re-check the repo name when only the branch is wrong. Shared by add and
+// search.
+func mapRefNotFoundError(origin, ref string, cause error) error {
+	return &UsageError{
+		Msg: fmt.Sprintf("origin ref %q was not found\n", ref) +
+			fmt.Sprintf("why: %q is reachable, but the branch/tag/commit %q it is pinned to does not exist (usually a typo in the @ref)\n", origin, ref) +
+			"fix: correct the @ref, or omit it to track the default branch (skillrig init --origin OWNER/REPO[@REF])",
 		Cause: cause,
 	}
 }

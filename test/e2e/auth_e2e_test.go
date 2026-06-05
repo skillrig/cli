@@ -470,6 +470,45 @@ func TestE2E_NoToken_DoesNotInvokeAskpass(t *testing.T) {
 	}
 }
 
+// TestE2E_NonexistentBranchRef (PR #32 review) — an origin pinned to a branch
+// that does not exist (OWNER/REPO@does-not-exist) must fail with an ACTIONABLE
+// origin/ref error pointing at the @ref, not a raw git dump. The branch fix made
+// `git fetch origin <ref>` the authoritative failure point for a typo'd ref; this
+// proves it is classified (RefNotFoundError) and rendered as navigation end-to-end.
+func TestE2E_NonexistentBranchRef(t *testing.T) {
+	projectRoot := newOriginBareRepo(t)
+	srv := newGitAuthServer(t, projectRoot, validToken)
+
+	// A valid token (the repo is reachable + authenticated) but a bogus @ref.
+	env := originEnv(t, srv.URL, validToken)
+	env["SKILLRIG_ORIGIN"] = "my-org/my-skills@does-not-exist"
+
+	res := runSkillrig(t, []string{"search"}, t.TempDir(), env)
+	if res.exit != 1 {
+		t.Fatalf("search @does-not-exist exit = %d, want 1 (stderr: %s)", res.exit, res.stderr)
+	}
+
+	if res.stdout != "" {
+		t.Errorf("error path must keep stdout empty, got: %q", res.stdout)
+	}
+
+	// Actionable origin/ref navigation (names the ref + how to fix), not raw git.
+	for _, want := range []string{"origin ref", "does-not-exist"} {
+		if !strings.Contains(res.stderr, want) {
+			t.Errorf("ref-not-found error missing %q; got:\n%s", want, res.stderr)
+		}
+	}
+
+	if !strings.Contains(res.stderr, "@ref") && !strings.Contains(res.stderr, "default branch") {
+		t.Errorf("ref-not-found fix should point at correcting the @ref / default branch; got:\n%s", res.stderr)
+	}
+
+	// The raw git artifact must NOT be the user-facing (non-verbose) message.
+	if strings.Contains(res.stderr, "couldn't find remote ref") {
+		t.Errorf("raw git 'couldn't find remote ref' leaked into the user message; got:\n%s", res.stderr)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Full init → search → add workflow (multi-skill catalog, branch + auth).
 // ---------------------------------------------------------------------------
