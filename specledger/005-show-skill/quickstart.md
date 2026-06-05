@@ -1,4 +1,4 @@
-# Quickstart — Acceptance Contract: `004-show-skill`
+# Quickstart — Acceptance Contract: `005-show-skill`
 
 Each scenario is an executable `TestQuickstart_*` (Constitution §II): concrete invocations, observable output, exit codes, and **output-shape** assertions (full untruncated human body; parseable + complete `--json`; 3-part errors). Resolves [issue #17](https://github.com/skillrig/cli/issues/17): humans had no way to read a skill's *full* description — `search` truncates it to ~80 chars and only an agent could recover it via `--json | jq`.
 

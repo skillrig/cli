@@ -1,6 +1,6 @@
 // This file holds the TestQuickstart_* integration suite for feature
-// 004-show-skill (the `skillrig show`/`info` command, issue #17). Each scenario
-// maps 1:1 to a scenario in specledger/004-show-skill/quickstart.md.
+// 005-show-skill (the `skillrig show`/`info` command, issue #17). Each scenario
+// maps 1:1 to a scenario in specledger/005-show-skill/quickstart.md.
 //
 // Like the 001/002/003 suites it builds the binary once (TestMain in
 // quickstart_test.go) and execs it via run(). show is a Query command that reads
