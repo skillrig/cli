@@ -81,7 +81,7 @@ func newShowCmd(opts *globalOpts) *cobra.Command {
 func (sc *showCmd) run(cmd *cobra.Command) error {
 	cwd, err := sc.getwd()
 	if err != nil {
-		return &UsageError{Msg: "cannot determine working directory\nwhy: " + err.Error(), Cause: err}
+		return usageCannotGetwd(err)
 	}
 
 	res, err := config.ResolveOrigin(cwd, sc.env)
@@ -99,7 +99,7 @@ func (sc *showCmd) run(cmd *cobra.Command) error {
 	repoRoot, err := gitToplevel(cmd.Context(), cwd)
 	if err != nil {
 		if !errors.Is(err, errNotGitRepo) {
-			return mapSearchError(res.Origin.String(), err)
+			return mapCatalogError("show", res.Origin.String(), err)
 		}
 
 		repoRoot = ""
@@ -107,11 +107,11 @@ func (sc *showCmd) run(cmd *cobra.Command) error {
 
 	catalog, err := loadCatalog(cmd.Context(), repoRoot, res.Origin)
 	if err != nil {
-		return mapSearchError(res.Origin.String(), err)
+		return mapCatalogError("show", res.Origin.String(), err)
 	}
 
 	if err := skillcore.CheckConvention(catalog.SkillrigConvention); err != nil {
-		return mapSearchError(res.Origin.String(), err)
+		return mapCatalogError("show", res.Origin.String(), err)
 	}
 
 	entry, ok := skillcore.FindSkill(catalog, sc.skill)

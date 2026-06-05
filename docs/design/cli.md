@@ -223,10 +223,12 @@ terraform-cost        | v0.9.0 | my-org | Estimate the cost delta of a plan.    
 
 `search` is **query-first**: `search [QUERY...]` is a case-insensitive token-AND substring match over `name` + `description` + `topics`, with `--topic` as a separate exact-string filter (repeatable). The result order is deterministic (N6) — a fixed relevance bucket (exact-name > name > topic > description match) then lexicographic by name. There is **no** fuzzy / semantic / TF-IDF ranking. An empty result is a **clean exit 0** (not an error) with a footer hint.
 
-**Truncation rules** (human output only):
+**Truncation rules** (compact *list* human output — `search`, the `verify` failure list):
 - Description: first 80 chars, append `...` if truncated
 - Newlines replaced with spaces
 - `requires` shown as a comma-joined tool list, not the full constraint set
+
+These rules keep a **list** scannable, where each row must stay one line so N items render in ~N lines. They do **not** apply to a **single-item detail view**: `skillrig show <skill>` is the deliberate drill-down that prints ONE skill's *complete, untruncated* description (multi-line preserved) — that is its entire reason to exist (issue #17). The list→detail split is the same scan→inspect workflow `--json` serves; `show` is the human inspect step. A detail view still strips terminal control bytes from the (untrusted, fetched) catalog text and bounds the surrounding structure (a fixed header block + footer), but the description body itself is intentionally full. Control bytes / ANSI escapes are stripped from all human output (list and detail) since catalog content is fetched and not trusted for terminal rendering; `--json` is never sanitized.
 
 **Footer hints**: Every compact output MUST end with a hint line suggesting the drill-down command. This is the agent's navigation cue.
 

@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"text/tabwriter"
+	"unicode"
 
 	"github.com/skillrig/cli/pkg/skillcore"
 )
@@ -162,7 +163,14 @@ func renderSearchResult(w io.Writer, origin string, matches []skillcore.CatalogE
 	// before the footer so the summary line is not drawn into the columns.
 	rows := make([][]string, 0, len(matches))
 	for _, e := range matches {
-		rows = append(rows, []string{e.Name, e.Version, "— " + truncateDesc(e.Description)})
+		// Catalog text is untrusted (fetched per call): strip terminal control
+		// bytes from each cell. truncateDesc already collapses newlines, so the
+		// single-line form is requested here too.
+		rows = append(rows, []string{
+			sanitizeTerminal(e.Name, false),
+			sanitizeTerminal(e.Version, false),
+			"— " + sanitizeTerminal(truncateDesc(e.Description), false),
+		})
 	}
 
 	if err := writeAlignedColumns(&b, rows); err != nil {
@@ -225,24 +233,30 @@ func renderShowResult(w io.Writer, origin string, e skillcore.CatalogEntry, json
 
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "%s  %s  (%s)\n", e.Name, e.Version, e.Namespace)
-	fmt.Fprintf(&b, "path:     %s\n", e.Path)
+	// Catalog text is untrusted (fetched per call): strip terminal control bytes
+	// from every field. Single-line fields drop newlines too; the description body
+	// keeps newlines so a genuinely multi-line description still renders.
+	name := sanitizeTerminal(e.Name, false)
+
+	fmt.Fprintf(&b, "%s  %s  (%s)\n", name, sanitizeTerminal(e.Version, false), sanitizeTerminal(e.Namespace, false))
+	fmt.Fprintf(&b, "path:     %s\n", sanitizeTerminal(e.Path, false))
 
 	if len(e.Topics) > 0 {
-		fmt.Fprintf(&b, "topics:   %s\n", strings.Join(e.Topics, ", "))
+		fmt.Fprintf(&b, "topics:   %s\n", sanitizeTerminal(strings.Join(e.Topics, ", "), false))
 	}
 
 	if len(e.Requires) > 0 {
-		fmt.Fprintf(&b, "requires: %s\n", joinRequires(e.Requires))
+		fmt.Fprintf(&b, "requires: %s\n", sanitizeTerminal(joinRequires(e.Requires), false))
 	}
 
 	// The whole point of show: the complete description, untruncated, set off by a
-	// blank line so it reads as the body of the record.
-	if desc := strings.TrimSpace(e.Description); desc != "" {
+	// blank line so it reads as the body of the record (control bytes stripped,
+	// newlines preserved).
+	if desc := strings.TrimSpace(sanitizeTerminal(e.Description, true)); desc != "" {
 		fmt.Fprintf(&b, "\n%s\n", desc)
 	}
 
-	fmt.Fprintf(&b, "\n%s%s\n", showFooterPrefix, e.Name)
+	fmt.Fprintf(&b, "\n%s%s\n", showFooterPrefix, name)
 
 	_, err := io.WriteString(w, b.String())
 
@@ -284,6 +298,29 @@ func truncateDesc(s string) string {
 	}
 
 	return string(r[:searchDescWidth-1]) + "…"
+}
+
+// sanitizeTerminal strips control characters from catalog-controlled text before
+// it is printed to a human terminal. An origin's index.json is fetched and is NOT
+// trusted to be free of ANSI escape sequences or other control bytes that could
+// spoof the terminal or inject crafted log lines (PR #19 review). Every control
+// rune is dropped — including the ESC that introduces an ANSI/CSI sequence, so
+// the sequence is neutralized and only its harmless printable remainder (e.g.
+// "[31m") survives — except newlines, which are kept when keepNewlines is set so
+// show can still render a genuinely multi-line description body. --json output is
+// NEVER routed through this: it must carry the exact bytes for an agent/jq.
+func sanitizeTerminal(s string, keepNewlines bool) string {
+	return strings.Map(func(r rune) rune {
+		if keepNewlines && r == '\n' {
+			return r
+		}
+
+		if unicode.IsControl(r) {
+			return -1
+		}
+
+		return r
+	}, s)
 }
 
 // indexResult is the presentation-layer view of an index generation: where the

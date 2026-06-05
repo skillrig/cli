@@ -50,6 +50,20 @@ func gitToplevel(ctx context.Context, cwd string) (string, error) {
 	return root, nil
 }
 
+// usageCannotGetwd builds the shared "cannot determine working directory" usage
+// error (exit 1) every command returns when os.Getwd fails. It is errors-as-
+// navigation like the rest: the what, the real cause (why), and an actionable
+// fix — a single implementation so the fix line cannot drift per command. The
+// raw cause is preserved for --verbose.
+func usageCannotGetwd(cause error) *UsageError {
+	return &UsageError{
+		Msg: "cannot determine working directory\n" +
+			"why: " + cause.Error() + "\n" +
+			"fix: re-run from an existing, readable directory (the shell's current directory may have been removed or be unreadable)",
+		Cause: cause,
+	}
+}
+
 // usageNotGitRepo builds the project-scope "not a git repository" usage error
 // (exit 1) shared by add and verify. why states the command-specific rationale;
 // the raw cause is preserved for --verbose.

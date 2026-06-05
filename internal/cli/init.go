@@ -144,7 +144,7 @@ func (ic *initCmd) writeTarget(cmd *cobra.Command) (path, scope string, err erro
 
 	cwd, err := ic.getwd()
 	if err != nil {
-		return "", "", &UsageError{Msg: "cannot determine working directory\nwhy: " + err.Error(), Cause: err}
+		return "", "", usageCannotGetwd(err)
 	}
 
 	path, err = config.ProjectWriteTarget(cmd.Context(), cwd)
