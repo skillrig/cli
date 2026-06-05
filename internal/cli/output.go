@@ -256,11 +256,52 @@ func renderShowResult(w io.Writer, origin string, e skillcore.CatalogEntry, json
 		fmt.Fprintf(&b, "\n%s\n", desc)
 	}
 
-	fmt.Fprintf(&b, "\n%s%s\n", showFooterPrefix, name)
+	fmt.Fprintf(&b, "\n%s%s\n", showFooterPrefix, shellSafeSkillArg(name))
 
 	_, err := io.WriteString(w, b.String())
 
 	return err
+}
+
+// shellSafeSkillArg renders a skill name as a copy-pasteable argument for the
+// `skillrig add` footer hint so the printed command is genuinely runnable (PR #19
+// review). A spec-conformant agentskills.io name (lowercase alphanumerics +
+// hyphens) is a clean token and is emitted bare. A name that is NOT a clean token
+// — which only a non-conformant origin could publish — is single-quoted for the
+// shell and prefixed with cobra's `--` end-of-options marker, so a leading dash
+// is not parsed as a flag and embedded spaces are not word-split. (Control bytes
+// were already stripped by sanitizeTerminal before this point.)
+func shellSafeSkillArg(name string) string {
+	if isPlainSkillToken(name) {
+		return name
+	}
+
+	return "-- " + shellSingleQuote(name)
+}
+
+// isPlainSkillToken reports whether name is a clean, copy-pasteable shell/cobra
+// token: non-empty, not starting with '-', and built only from unreserved
+// characters [A-Za-z0-9._-]. Such a name needs neither quoting nor a `--` guard.
+func isPlainSkillToken(name string) bool {
+	if name == "" || name[0] == '-' {
+		return false
+	}
+
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
+// shellSingleQuote wraps s in POSIX single quotes, escaping any embedded single
+// quote, so it is a single shell word regardless of spaces or metacharacters.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // joinRequires renders a skill's backing-tool requirements as a compact human

@@ -143,6 +143,63 @@ func TestRenderShowResult_StripsControlBytes(t *testing.T) {
 	}
 }
 
+// TestShellSafeSkillArg pins the runnable-footer contract (PR #19): a
+// spec-conformant name is emitted bare, while a name that would break a copied
+// command — leading dash (cobra flag), spaces (shell split), or an embedded quote
+// — is `--`-guarded and single-quoted so the printed `skillrig add ...` stays
+// runnable.
+func TestShellSafeSkillArg(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "plain slug emitted bare", in: "terraform-plan-review", want: "terraform-plan-review"},
+		{name: "unreserved chars stay bare", in: "Foo_bar.baz-1", want: "Foo_bar.baz-1"},
+		{name: "leading dash guarded and quoted", in: "-rf", want: "-- '-rf'"},
+		{name: "spaces quoted", in: "a b", want: "-- 'a b'"},
+		{name: "embedded single quote escaped", in: "a'b", want: `-- 'a'\''b'`},
+		{name: "shell metacharacter quoted", in: "a;b", want: "-- 'a;b'"},
+		{name: "empty quoted", in: "", want: "-- ''"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := shellSafeSkillArg(tt.in); got != tt.want {
+				t.Errorf("shellSafeSkillArg(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRenderShowResult_FooterRunnableForHostileName proves a non-conformant
+// catalog name cannot produce a non-runnable footer: a leading-dash, space-laden
+// name is rendered as a `--`-guarded, single-quoted `skillrig add` argument.
+func TestRenderShowResult_FooterRunnableForHostileName(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	e := skillcore.CatalogEntry{
+		Name:        "-rm rf",
+		Version:     "1.0.0",
+		Namespace:   "x",
+		Description: "d",
+		Path:        "skills/x",
+	}
+	if err := renderShowResult(&buf, "o/r", e, false); err != nil {
+		t.Fatalf("renderShowResult: %v", err)
+	}
+
+	if !strings.Contains(buf.String(), "skillrig add -- '-rm rf'") {
+		t.Errorf("footer is not a runnable (guarded + quoted) command:\n%s", buf.String())
+	}
+}
+
 // lineAt returns lines[i] or "<none>" when i is out of range, for clearer
 // shape-assertion failure messages.
 func lineAt(lines []string, i int) string {

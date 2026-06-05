@@ -622,13 +622,85 @@ func searchSkillNames(t *testing.T, stdout string) []string {
 	return names
 }
 
+// showRecord mirrors the `skillrig show --json` payload: the resolved origin and
+// the single point-lookup skill's record (the fields the workflow asserts).
+type showRecord struct {
+	Origin string `json:"origin"`
+	Skill  struct {
+		Name        string `json:"name"`
+		Version     string `json:"version"`
+		Namespace   string `json:"namespace"`
+		Description string `json:"description"`
+		Path        string `json:"path"`
+	} `json:"skill"`
+}
+
+// decodeShowRecord strictly decodes `show --json` stdout into a showRecord.
+func decodeShowRecord(t *testing.T, stdout string) showRecord {
+	t.Helper()
+
+	var rec showRecord
+	if err := json.Unmarshal([]byte(stdout), &rec); err != nil {
+		t.Fatalf("show --json is not parseable: %v\n%s", err, stdout)
+	}
+
+	return rec
+}
+
+// runShowJSON runs `skillrig show <target> --json` in the consumer with the
+// given env, asserts a clean success (exit 0, empty stderr), and returns the
+// decoded record.
+func runShowJSON(t *testing.T, consumer string, env map[string]string, target string) showRecord {
+	t.Helper()
+
+	shr := runSkillrig(t, []string{"show", target, "--json"}, consumer, env)
+	if shr.exit != 0 {
+		t.Fatalf("show %s exit = %d (stderr: %s)", target, shr.exit, shr.stderr)
+	}
+
+	if shr.stderr != "" {
+		t.Errorf("show %s wrote to stderr on success: %q", target, shr.stderr)
+	}
+
+	return decodeShowRecord(t, shr.stdout)
+}
+
+// assertShowRecord checks a `show --json` record: the origin preserves the
+// configured reference (including any @branch), the skill is the requested
+// point-lookup target, and the core record fields are populated.
+func assertShowRecord(t *testing.T, rec showRecord, wantOrigin, wantName string) {
+	t.Helper()
+
+	if rec.Origin != wantOrigin {
+		t.Errorf("show origin = %q, want the configured origin %q (incl. any @branch)", rec.Origin, wantOrigin)
+	}
+
+	if rec.Skill.Name != wantName {
+		t.Errorf("show skill.name = %q, want the requested target %q", rec.Skill.Name, wantName)
+	}
+
+	for field, val := range map[string]string{
+		"version":     rec.Skill.Version,
+		"namespace":   rec.Skill.Namespace,
+		"description": rec.Skill.Description,
+		"path":        rec.Skill.Path,
+	} {
+		if strings.TrimSpace(val) == "" {
+			t.Errorf("show %s: skill.%s is empty, want a populated record field", wantName, field)
+		}
+	}
+}
+
 // TestE2E_FullWorkflow drives the complete consumer loop against the real
 // auth-gated server: `skillrig init --origin` (BOTH the default-branch and the
 // @staging forms, with auth), then `search` (asserting >1 result, exactly the
-// branch's catalog), then `add` of the first and second skill (asserting each is
-// vendored and locked). The @staging case is the end-to-end proof of the
-// non-default-branch catalog fix — its search returns the staging-only skill that
-// only exists on that branch, which a pre-fix build could not fetch at all.
+// branch's catalog), then `show` of one skill (asserting the full point-lookup
+// record over the same authenticated remote), then `add` of the first and second
+// skill (asserting each is vendored and locked). The @staging case is the
+// end-to-end proof of the non-default-branch catalog fix — its search returns the
+// staging-only skill that only exists on that branch, which a pre-fix build could
+// not fetch at all, and its `show staging-only` proves the detail view reads the
+// @ref'd catalog too.
 func TestE2E_FullWorkflow(t *testing.T) {
 	projectRoot := newMultiSkillOrigin(t)
 	srv := newGitAuthServer(t, projectRoot, validToken)
@@ -687,6 +759,15 @@ func TestE2E_FullWorkflow(t *testing.T) {
 			if !slices.Equal(got, tc.wantSkills) {
 				t.Errorf("search names = %v, want %v (wrong branch's catalog)", got, tc.wantSkills)
 			}
+
+			// show (authenticated) — point-lookup ONE skill's full record from the
+			// SAME resolved origin/config/env, over the real auth-gated remote. The
+			// target is the first skill this branch adds, so for @staging it is the
+			// branch-only `staging-only` — a success additionally proves show reads
+			// the @ref'd catalog, not just the default branch. The invocation and
+			// assertions live in helpers to keep this workflow readable.
+			showTarget := tc.add[0]
+			assertShowRecord(t, runShowJSON(t, consumer, env, showTarget), tc.originArg, showTarget)
 
 			// add the first and second skill — each vendored byte-present + locked.
 			for i, skill := range tc.add {
