@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/skillrig/cli/compare/v1.0.2...v1.0.3) (2026-06-05)
+
+
+### Bug Fixes
+
+* **fetch:** resolve catalog for a non-default-branch origin ([#32](https://github.com/skillrig/cli/issues/32)) ([3b97e80](https://github.com/skillrig/cli/commit/3b97e8018001ec491043d9e0ffbce8d7c7c12134))
+
 ## [1.0.2](https://github.com/skillrig/cli/compare/v1.0.1...v1.0.2) (2026-06-04)
 
 
