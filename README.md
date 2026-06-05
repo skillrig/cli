@@ -125,6 +125,25 @@ skillrig search terraform plan
 skillrig search --topic aws --topic terraform
 ```
 
+### `show`
+
+Print **one** skill's full record from the configured origin — its complete,
+**untruncated** description (the part `search` clips to a one-line preview), plus
+its version, namespace, topics, path, and backing-tool requirements. `show` is the
+human counterpart to `search`: where `search` lists many skills compactly, `show`
+drills into one (an agent gets the same data from `search ... --json | jq`).
+`info` is an alias. Read-only; needs a resolvable origin but no git working tree;
+the skill name is matched exactly. A name the origin does not publish is exit 1
+(run `skillrig search` to list the real names).
+
+```sh
+# Show a skill's full details (alias: skillrig info <skill>).
+skillrig show terraform-plan-review
+
+# The complete record as JSON, for an agent or jq.
+skillrig show terraform-plan-review --json
+```
+
 ### `add`
 
 Vendor a named skill from the configured origin into the canonical

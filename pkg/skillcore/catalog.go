@@ -320,6 +320,23 @@ func Search(catalog Catalog, query, topics []string) []CatalogEntry {
 	return matched
 }
 
+// FindSkill returns the catalog entry whose name matches name exactly, and a
+// bool reporting whether one was found. The match is exact and case-sensitive: a
+// skill name is a single path segment and the canonical key add vendors by, so a
+// point lookup resolves the same identity add would. It is the ONE exact-name
+// lookup primitive show dispatches to (AP-04) — deliberately separate from the
+// fuzzy, case-insensitive Search matcher, which is a filter, not an identity
+// lookup.
+func FindSkill(catalog Catalog, name string) (CatalogEntry, bool) {
+	for _, entry := range catalog.Skills {
+		if entry.Name == name {
+			return entry, true
+		}
+	}
+
+	return CatalogEntry{}, false
+}
+
 // matchesEntry reports whether entry satisfies every lowercased query term
 // (token-AND substring over name+description+topics) and carries every requested
 // topic (case-insensitive exact membership).

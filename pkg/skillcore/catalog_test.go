@@ -342,6 +342,60 @@ func TestSearch_OrderingAndDeterminism(t *testing.T) {
 	}
 }
 
+// TestFindSkill_ExactMatch pins FindSkill's contract: an exact, case-sensitive
+// name lookup that returns the full entry when present and (zero, false) when
+// not. It is the identity lookup show dispatches to — deliberately stricter than
+// the fuzzy, case-insensitive Search matcher, so a case-mismatched or partial
+// name is a miss, not a loose hit.
+func TestFindSkill_ExactMatch(t *testing.T) {
+	t.Parallel()
+
+	catalog := Catalog{
+		SkillrigConvention: 1,
+		Origin:             "my-org/my-skills",
+		Skills: []CatalogEntry{
+			{Name: "terraform-plan-review", Version: "1.4.0", Description: "Review a plan."},
+			{Name: "aws-iam-audit", Version: "2.0.0", Description: "Audit IAM."},
+		},
+	}
+
+	tests := []struct {
+		name      string
+		query     string
+		wantFound bool
+		wantVer   string
+	}{
+		{name: "exact hit returns the full entry", query: "terraform-plan-review", wantFound: true, wantVer: "1.4.0"},
+		{name: "second exact hit", query: "aws-iam-audit", wantFound: true, wantVer: "2.0.0"},
+		{name: "case mismatch is a miss (exact, not fuzzy)", query: "Terraform-Plan-Review", wantFound: false},
+		{name: "partial name is a miss (lookup, not filter)", query: "terraform", wantFound: false},
+		{name: "absent name is a miss", query: "kubernetes", wantFound: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, found := FindSkill(catalog, tt.query)
+			if found != tt.wantFound {
+				t.Fatalf("FindSkill(%q) found = %v, want %v", tt.query, found, tt.wantFound)
+			}
+
+			if !found {
+				if got.Name != "" {
+					t.Errorf("FindSkill(%q) miss should return the zero entry, got %+v", tt.query, got)
+				}
+
+				return
+			}
+
+			if got.Name != tt.query || got.Version != tt.wantVer {
+				t.Errorf("FindSkill(%q) = %q/%q, want %q/%q", tt.query, got.Name, got.Version, tt.query, tt.wantVer)
+			}
+		})
+	}
+}
+
 // namesOf projects entries to their names, preserving order. It returns a
 // non-nil empty slice for an empty input so reflect.DeepEqual against a
 // []string{} literal (the no-match expectation) holds.

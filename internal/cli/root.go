@@ -128,6 +128,7 @@ func Execute() int {
 func registerSubcommands(root *cobra.Command, opts *globalOpts) {
 	root.AddCommand(newInitCmd(opts))
 	root.AddCommand(newSearchCmd(opts))
+	root.AddCommand(newShowCmd(opts))
 	root.AddCommand(newAddCmd(opts))
 	root.AddCommand(newVerifyCmd(opts))
 	root.AddCommand(newIndexCmd(opts))

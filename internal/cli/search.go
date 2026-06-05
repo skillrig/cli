@@ -84,7 +84,7 @@ func newSearchCmd(opts *globalOpts) *cobra.Command {
 func (sc *searchCmd) run(cmd *cobra.Command) error {
 	cwd, err := sc.getwd()
 	if err != nil {
-		return &UsageError{Msg: "cannot determine working directory\nwhy: " + err.Error(), Cause: err}
+		return usageCannotGetwd(err)
 	}
 
 	res, err := config.ResolveOrigin(cwd, sc.env)
@@ -106,7 +106,7 @@ func (sc *searchCmd) run(cmd *cobra.Command) error {
 		if !errors.Is(err, errNotGitRepo) {
 			// An unexpected failure (e.g. context cancellation) is not a "not a
 			// repo" precondition — surface it rather than silently proceed.
-			return mapSearchError(res.Origin.String(), err)
+			return mapCatalogError("search", res.Origin.String(), err)
 		}
 
 		repoRoot = ""
@@ -114,11 +114,11 @@ func (sc *searchCmd) run(cmd *cobra.Command) error {
 
 	catalog, err := loadCatalog(cmd.Context(), repoRoot, res.Origin)
 	if err != nil {
-		return mapSearchError(res.Origin.String(), err)
+		return mapCatalogError("search", res.Origin.String(), err)
 	}
 
 	if err := skillcore.CheckConvention(catalog.SkillrigConvention); err != nil {
-		return mapSearchError(res.Origin.String(), err)
+		return mapCatalogError("search", res.Origin.String(), err)
 	}
 
 	matches := skillcore.Search(catalog, sc.query, sc.topics)
@@ -192,7 +192,7 @@ func localCatalogPath(repoRoot string, origin config.Origin) (string, bool) {
 }
 
 // readCatalogFile reads and parses a local index.json, tagging the read and parse
-// failures distinctly so mapSearchError can author the right what/why/fix.
+// failures distinctly so mapCatalogError can author the right what/why/fix.
 func readCatalogFile(catalogPath string) (skillcore.Catalog, error) {
 	//nolint:gosec // G304: path is the resolved origin path/checkout + a fixed file name, not attacker-controlled.
 	data, err := os.ReadFile(catalogPath)
@@ -209,7 +209,7 @@ func readCatalogFile(catalogPath string) (skillcore.Catalog, error) {
 }
 
 // catalogReadError marks the origin's catalog as unreadable (absent or no
-// permission). It is presentation-free here only in that mapSearchError renders
+// permission). It is presentation-free here only in that mapCatalogError renders
 // the what/why/fix; it carries the path and raw cause for --verbose.
 type catalogReadError struct {
 	path  string
@@ -232,12 +232,15 @@ func (e *catalogParseError) Error() string {
 }
 func (e *catalogParseError) Unwrap() error { return e.cause }
 
-// mapSearchError maps the failure classes search can surface to navigational
-// *UsageError values (exit 1), authoring the what/why/fix prose while preserving
-// the raw cause for --verbose. The convention mismatch, an unreachable/auth
-// origin, and a malformed catalog are distinct messages so the agent debugs the
-// real problem (errors-as-navigation; do not conflate look-alike classes).
-func mapSearchError(origin string, err error) error {
+// mapCatalogError maps the failure classes a catalog-reading Query command
+// (search, show) can surface to navigational *UsageError values (exit 1),
+// authoring the what/why/fix prose while preserving the raw cause for --verbose.
+// The convention mismatch, an unreachable/auth origin, and a malformed catalog
+// are distinct messages so the agent debugs the real problem (errors-as-
+// navigation; do not conflate look-alike classes). cmd names the invoking command
+// so the generic fallback reads "<cmd> failed" instead of hardcoding one
+// subcommand for both callers.
+func mapCatalogError(cmd, origin string, err error) error {
 	var convErr *skillcore.IncompatibleConventionError
 	if errors.As(err, &convErr) {
 		return mapConventionError(origin, convErr, err)
@@ -290,5 +293,5 @@ func mapSearchError(origin string, err error) error {
 		return usageErr
 	}
 
-	return &UsageError{Msg: "search failed\nwhy: " + err.Error(), Cause: err}
+	return &UsageError{Msg: cmd + " failed\nwhy: " + err.Error(), Cause: err}
 }

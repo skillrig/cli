@@ -64,7 +64,7 @@ func newVerifyCmd(opts *globalOpts) *cobra.Command {
 func (vc *verifyCmd) run(cmd *cobra.Command) error {
 	cwd, err := vc.getwd()
 	if err != nil {
-		return &UsageError{Msg: "cannot determine working directory\nwhy: " + err.Error(), Cause: err}
+		return usageCannotGetwd(err)
 	}
 
 	repoRoot, err := gitToplevel(cmd.Context(), cwd)

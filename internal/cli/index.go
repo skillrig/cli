@@ -83,7 +83,7 @@ func newIndexCmd(opts *globalOpts) *cobra.Command {
 func (ic *indexCmd) run(cmd *cobra.Command) error {
 	cwd, err := ic.getwd()
 	if err != nil {
-		return &UsageError{Msg: "cannot determine working directory\nwhy: " + err.Error(), Cause: err}
+		return usageCannotGetwd(err)
 	}
 
 	originRoot, err := gitToplevel(cmd.Context(), cwd)

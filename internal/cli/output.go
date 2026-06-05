@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"text/tabwriter"
+	"unicode"
 
 	"github.com/skillrig/cli/pkg/skillcore"
 )
@@ -162,7 +163,14 @@ func renderSearchResult(w io.Writer, origin string, matches []skillcore.CatalogE
 	// before the footer so the summary line is not drawn into the columns.
 	rows := make([][]string, 0, len(matches))
 	for _, e := range matches {
-		rows = append(rows, []string{e.Name, e.Version, "— " + truncateDesc(e.Description)})
+		// Catalog text is untrusted (fetched per call): strip terminal control
+		// bytes from each cell. truncateDesc already collapses newlines, so the
+		// single-line form is requested here too.
+		rows = append(rows, []string{
+			sanitizeTerminal(e.Name, false),
+			sanitizeTerminal(e.Version, false),
+			"— " + sanitizeTerminal(truncateDesc(e.Description), false),
+		})
 	}
 
 	if err := writeAlignedColumns(&b, rows); err != nil {
@@ -195,6 +203,125 @@ func writeAlignedColumns(w io.Writer, rows [][]string) error {
 	return tw.Flush()
 }
 
+// showResultJSON is the complete, untruncated --json view of a show: the
+// resolved origin and the single matched skill with every field add needs. It
+// reuses the skillcore.CatalogEntry JSON tags, so the record is byte-for-byte the
+// same shape search emits per entry — one entry, named `skill`.
+type showResultJSON struct {
+	Origin string                 `json:"origin"`
+	Skill  skillcore.CatalogEntry `json:"skill"`
+}
+
+// showFooterPrefix is the next-step footer for a human show — the skill name is
+// appended so the hint is a runnable command (cli.md Principle 3).
+const showFooterPrefix = "→ vendor it: skillrig add "
+
+// renderShowResult writes a single skill's full record to w. With jsonOut it
+// emits one complete JSON object (origin + the whole catalog entry, all fields
+// present); otherwise a human-friendly labelled block whose defining feature is
+// the COMPLETE, untruncated description — the gap issue #17 closes, since search
+// clips it to ~80 chars. The block is a fixed handful of header/field lines plus
+// the description body and a footer hint. Data goes to stdout (the caller passes
+// cmd.OutOrStdout()).
+func renderShowResult(w io.Writer, origin string, e skillcore.CatalogEntry, jsonOut bool) error {
+	if jsonOut {
+		enc := json.NewEncoder(w)
+		enc.SetEscapeHTML(false)
+
+		return enc.Encode(showResultJSON{Origin: origin, Skill: e})
+	}
+
+	var b strings.Builder
+
+	// Catalog text is untrusted (fetched per call): strip terminal control bytes
+	// from every field. Single-line fields drop newlines too; the description body
+	// keeps newlines so a genuinely multi-line description still renders.
+	name := sanitizeTerminal(e.Name, false)
+
+	fmt.Fprintf(&b, "%s  %s  (%s)\n", name, sanitizeTerminal(e.Version, false), sanitizeTerminal(e.Namespace, false))
+	fmt.Fprintf(&b, "path:     %s\n", sanitizeTerminal(e.Path, false))
+
+	if len(e.Topics) > 0 {
+		fmt.Fprintf(&b, "topics:   %s\n", sanitizeTerminal(strings.Join(e.Topics, ", "), false))
+	}
+
+	if len(e.Requires) > 0 {
+		fmt.Fprintf(&b, "requires: %s\n", sanitizeTerminal(joinRequires(e.Requires), false))
+	}
+
+	// The whole point of show: the complete description, untruncated, set off by a
+	// blank line so it reads as the body of the record (control bytes stripped,
+	// newlines preserved).
+	if desc := strings.TrimSpace(sanitizeTerminal(e.Description, true)); desc != "" {
+		fmt.Fprintf(&b, "\n%s\n", desc)
+	}
+
+	fmt.Fprintf(&b, "\n%s%s\n", showFooterPrefix, shellSafeSkillArg(name))
+
+	_, err := io.WriteString(w, b.String())
+
+	return err
+}
+
+// shellSafeSkillArg renders a skill name as a copy-pasteable argument for the
+// `skillrig add` footer hint so the printed command is genuinely runnable (PR #19
+// review). A spec-conformant agentskills.io name (lowercase alphanumerics +
+// hyphens) is a clean token and is emitted bare. A name that is NOT a clean token
+// — which only a non-conformant origin could publish — is single-quoted for the
+// shell and prefixed with cobra's `--` end-of-options marker, so a leading dash
+// is not parsed as a flag and embedded spaces are not word-split. (Control bytes
+// were already stripped by sanitizeTerminal before this point.)
+func shellSafeSkillArg(name string) string {
+	if isPlainSkillToken(name) {
+		return name
+	}
+
+	return "-- " + shellSingleQuote(name)
+}
+
+// isPlainSkillToken reports whether name is a clean, copy-pasteable shell/cobra
+// token: non-empty, not starting with '-', and built only from unreserved
+// characters [A-Za-z0-9._-]. Such a name needs neither quoting nor a `--` guard.
+func isPlainSkillToken(name string) bool {
+	if name == "" || name[0] == '-' {
+		return false
+	}
+
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
+// shellSingleQuote wraps s in POSIX single quotes, escaping any embedded single
+// quote, so it is a single shell word regardless of spaces or metacharacters.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// joinRequires renders a skill's backing-tool requirements as a compact human
+// summary — "tool (version)" joined by commas, or a bare tool when no version
+// constraint is recorded — mirroring search's requires summary.
+func joinRequires(reqs []skillcore.Require) string {
+	parts := make([]string, 0, len(reqs))
+
+	for _, r := range reqs {
+		part := r.Tool
+		if r.Version != "" {
+			part += " (" + r.Version + ")"
+		}
+
+		parts = append(parts, part)
+	}
+
+	return strings.Join(parts, ", ")
+}
+
 // searchEmptyFooter is the next-step hint for an empty search result (still exit 0).
 const searchEmptyFooter = "→ broaden the query, or run skillrig search with no filter to list all"
 
@@ -212,6 +339,29 @@ func truncateDesc(s string) string {
 	}
 
 	return string(r[:searchDescWidth-1]) + "…"
+}
+
+// sanitizeTerminal strips control characters from catalog-controlled text before
+// it is printed to a human terminal. An origin's index.json is fetched and is NOT
+// trusted to be free of ANSI escape sequences or other control bytes that could
+// spoof the terminal or inject crafted log lines (PR #19 review). Every control
+// rune is dropped — including the ESC that introduces an ANSI/CSI sequence, so
+// the sequence is neutralized and only its harmless printable remainder (e.g.
+// "[31m") survives — except newlines, which are kept when keepNewlines is set so
+// show can still render a genuinely multi-line description body. --json output is
+// NEVER routed through this: it must carry the exact bytes for an agent/jq.
+func sanitizeTerminal(s string, keepNewlines bool) string {
+	return strings.Map(func(r rune) rune {
+		if keepNewlines && r == '\n' {
+			return r
+		}
+
+		if unicode.IsControl(r) {
+			return -1
+		}
+
+		return r
+	}, s)
 }
 
 // indexResult is the presentation-layer view of an index generation: where the

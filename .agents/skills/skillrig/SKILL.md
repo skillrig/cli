@@ -3,10 +3,12 @@ name: skillrig
 description: >-
   Point a repository at your org's agent-skills library and manage vendored skills with the
   `skillrig` CLI — bind/choose the origin (`init`), search/discover skills in it (`search`),
-  vendor/add a skill (`add`, local or remote, with an optional immutable `--pin`),
-  verify/check that committed skills are exactly what was approved (`verify`), and generate
-  the origin's catalog (`index`). Use whenever the user wants to find, search, discover,
-  install, add, vendor, pull in, lock, or pin an agent skill from a skills library; filter
+  view one skill's full details (`show`/`info`), vendor/add a skill (`add`, local or remote,
+  with an optional immutable `--pin`), verify/check that committed skills are exactly what was
+  approved (`verify`), and generate the origin's catalog (`index`). Use whenever the user wants
+  to find, search, discover, install, add, vendor, pull in, lock, or pin an agent skill from a
+  skills library; read or see a skill's full/complete description or details (`show`/`info`)
+  when the search table truncated it; filter
   skills by topic; set/configure where skills come from or fix a "no origin configured" error;
   point a repo at a skills repo (OWNER/REPO[@branch]) or use SKILLRIG_ORIGIN; fetch from a
   private/remote origin or debug auth / unreachable / not-found / no-such-version fetch errors;
@@ -46,6 +48,7 @@ unmodified (a CI gate), including debugging command output:
 |---|---|---|
 | Choose where skills come from (bind the origin) | `skillrig init` | [references/init.md](references/init.md) |
 | Discover skills in the origin (search/filter by topic) | `skillrig search [QUERY...]` | [references/search.md](references/search.md) |
+| Read one skill's full details (untruncated description) | `skillrig show <skill>` (alias `info`) | [references/show.md](references/show.md) |
 | Vendor a skill into the repo (local or remote; `--pin` a version) | `skillrig add <skill>` | [references/add.md](references/add.md) |
 | Prove vendored skills match what was approved | `skillrig verify` | [references/verify.md](references/verify.md) |
 | **Origin-side:** generate the origin's catalog (`index.json`) | `skillrig index` | [references/index.md](references/index.md) |
@@ -97,5 +100,5 @@ from our library" is `skillrig`; "what skills exist out there for X?" is `find-s
 
 Designed but **not implemented** (don't assume they exist): multi-client symlink views, a
 prerequisite/health `doctor` (the reserved exit `3`), `bump --pr` upgrades, and `global`
-scope. The shipped surface is `init` + `search` + `add` (local **or** remote, with `--pin`) +
-`verify`, plus the origin-side `index` generator.
+scope. The shipped surface is `init` + `search` + `show` (alias `info`) + `add` (local **or**
+remote, with `--pin`) + `verify`, plus the origin-side `index` generator.

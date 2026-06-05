@@ -99,7 +99,7 @@ func newAddCmd(opts *globalOpts) *cobra.Command {
 func (ac *addCmd) run(cmd *cobra.Command) error {
 	cwd, err := ac.getwd()
 	if err != nil {
-		return &UsageError{Msg: "cannot determine working directory\nwhy: " + err.Error(), Cause: err}
+		return usageCannotGetwd(err)
 	}
 
 	res, err := config.ResolveOrigin(cwd, ac.env)
