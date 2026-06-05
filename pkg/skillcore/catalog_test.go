@@ -446,6 +446,13 @@ func TestClassifyGitError_StderrToTyped(t *testing.T) {
 			want:   classNotFound,
 		},
 		{
+			// A typo'd / nonexistent origin @ref: `git fetch origin <ref>` reports
+			// this (distinct from a missing REPO), so the CLI can point at the @ref.
+			name:   "couldn't find remote ref -> RefNotFoundError",
+			stderr: "fatal: couldn't find remote ref does-not-exist",
+			want:   classRefNotFound,
+		},
+		{
 			name:   "unrecognized stderr passes the raw *GitError through",
 			stderr: "fatal: early EOF",
 			want:   classRaw,
@@ -489,6 +496,7 @@ const (
 	classAuth
 	classUnreachable
 	classNotFound
+	classRefNotFound
 )
 
 func (c errClass) String() string {
@@ -499,6 +507,8 @@ func (c errClass) String() string {
 		return "UnreachableError"
 	case classNotFound:
 		return "NotFoundError"
+	case classRefNotFound:
+		return "RefNotFoundError"
 	case classRaw:
 		return "raw *GitError"
 	default:
@@ -511,9 +521,10 @@ func (c errClass) String() string {
 // wins — the network types are checked before falling through to raw.
 func classOf(err error) errClass {
 	var (
-		a *AuthError
-		u *UnreachableError
-		n *NotFoundError
+		a  *AuthError
+		u  *UnreachableError
+		n  *NotFoundError
+		rn *RefNotFoundError
 	)
 
 	switch {
@@ -523,6 +534,8 @@ func classOf(err error) errClass {
 		return classUnreachable
 	case errors.As(err, &n):
 		return classNotFound
+	case errors.As(err, &rn):
+		return classRefNotFound
 	default:
 		return classRaw
 	}
@@ -724,5 +737,134 @@ metadata:
 
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ParseManifest metadata.x-skillrig lift mismatch:\n got = %+v\nwant = %+v", got, want)
+	}
+}
+
+// oneSkillCatalog renders a minimal one-skill index.json whose sole skill is
+// named `skill`. Both branches in bareOriginWithBranch share the SAME `origin`
+// (as a real catalog does) and differ only by this skill — so the test's
+// discriminator is the catalog CONTENT a real fetch returns, not a per-branch
+// marker (review feedback: avoid a tautological assertion).
+func oneSkillCatalog(skill string) string {
+	return `{"skillrigConvention":1,"origin":"my-org/my-skills","skills":[` +
+		`{"name":"` + skill + `","version":"1.0.0","namespace":"my-org",` +
+		`"description":"d","topics":[],"path":"skills/` + skill + `"}]}` + "\n"
+}
+
+// bareOriginWithBranch builds a real bare git origin whose DEFAULT branch (main)
+// and a NON-DEFAULT branch (feature) carry the SAME origin but DIFFERENT skills
+// (skill-on-main vs skill-on-feature), and returns the bare repo path. It is the
+// file:// substrate the constitution §III sanctions for exercising the
+// remote-fetch boundary offline.
+func bareOriginWithBranch(t *testing.T) string {
+	t.Helper()
+
+	work := t.TempDir()
+	runGit(t, work, "init", "-q", "-b", "main")
+	writeFile(t, work, "index.json", 0o644, oneSkillCatalog("skill-on-main"))
+	runGit(t, work, "add", "-A")
+	runGit(t, work, "commit", "-q", "-m", "main catalog")
+
+	runGit(t, work, "checkout", "-q", "-b", "feature")
+	writeFile(t, work, "index.json", 0o644, oneSkillCatalog("skill-on-feature"))
+	runGit(t, work, "add", "-A")
+	runGit(t, work, "commit", "-q", "-m", "feature catalog")
+	runGit(t, work, "checkout", "-q", "main")
+
+	bare := filepath.Join(t.TempDir(), "origin.git")
+	runGit(t, work, "clone", "-q", "--bare", ".", bare)
+
+	return bare
+}
+
+// TestFetchCatalog_NonDefaultBranchRef pins the @branch regression: an origin
+// pinned to a NON-DEFAULT branch (OWNER/REPO@feature) must fetch THAT branch's
+// catalog. The bug was that a fresh clone leaves a non-default branch only as
+// refs/remotes/origin/<branch>, so `git show <branch>:index.json` failed with
+// "invalid object name" and search/add broke for any @branch origin. The
+// discriminator is the branch-specific SKILL (not a marker field), and the
+// default branch is also asserted so the fix is shown not to regress it.
+func TestFetchCatalog_NonDefaultBranchRef(t *testing.T) {
+	t.Parallel()
+
+	bare := bareOriginWithBranch(t)
+	repoURL := "file://" + bare
+
+	cases := []struct {
+		ref       string
+		wantSkill string
+	}{
+		{ref: "feature", wantSkill: "skill-on-feature"}, // the bug: a non-default branch
+		{ref: "main", wantSkill: "skill-on-main"},       // the always-worked default branch
+		{ref: "HEAD", wantSkill: "skill-on-main"},       // the no-@ref default (FetchCatalog maps "" → HEAD)
+	}
+
+	for _, tc := range cases {
+		t.Run("ref="+tc.ref, func(t *testing.T) {
+			t.Parallel()
+
+			cat, err := FetchCatalog(t.Context(), CatalogRequest{
+				RepoURL: repoURL,
+				Origin:  "o/r@" + tc.ref,
+				Ref:     tc.ref,
+				Local:   true,
+			})
+			if err != nil {
+				t.Fatalf("FetchCatalog @%s: unexpected error: %v", tc.ref, err)
+			}
+
+			if len(cat.Skills) != 1 || cat.Skills[0].Name != tc.wantSkill {
+				t.Errorf("FetchCatalog @%s skills = %v, want exactly [%s] (wrong branch's catalog)",
+					tc.ref, catalogSkillNames(cat), tc.wantSkill)
+			}
+		})
+	}
+}
+
+// catalogSkillNames projects a catalog's skills to their names for assertions.
+func catalogSkillNames(cat Catalog) []string {
+	names := make([]string, len(cat.Skills))
+	for i, s := range cat.Skills {
+		names[i] = s.Name
+	}
+
+	return names
+}
+
+// TestFetchCatalog_NonexistentRef pins the typo'd-@ref UX (PR #32 review): an
+// origin pinned to a branch that does not exist (OWNER/REPO@does-not-exist) must
+// surface as an actionable *RefNotFoundError, NOT a raw *GitError. The explicit
+// `git fetch origin <ref>` the branch fix added is the authoritative failure point
+// for this (git: "couldn't find remote ref ..."); without classification the CLI
+// would dump the raw git failure instead of pointing at the @ref.
+func TestFetchCatalog_NonexistentRef(t *testing.T) {
+	t.Parallel()
+
+	bare := bareOriginWithBranch(t)
+
+	_, err := FetchCatalog(t.Context(), CatalogRequest{
+		RepoURL: "file://" + bare,
+		Origin:  "my-org/my-skills@does-not-exist",
+		Ref:     "does-not-exist",
+		Local:   true,
+	})
+
+	var refErr *RefNotFoundError
+	if !errors.As(err, &refErr) {
+		t.Fatalf("FetchCatalog @does-not-exist error = %T (%v), want *RefNotFoundError", err, err)
+	}
+
+	if refErr.Ref != "does-not-exist" {
+		t.Errorf("RefNotFoundError.Ref = %q, want %q", refErr.Ref, "does-not-exist")
+	}
+
+	if refErr.Origin != "my-org/my-skills@does-not-exist" {
+		t.Errorf("RefNotFoundError.Origin = %q, want the configured origin", refErr.Origin)
+	}
+
+	// The raw *GitError stays reachable for --verbose (errors-as-navigation).
+	var gitErr *GitError
+	if !errors.As(err, &gitErr) {
+		t.Errorf("RefNotFoundError does not unwrap to *GitError (--verbose would have nothing)")
 	}
 }

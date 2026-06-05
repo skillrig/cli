@@ -183,6 +183,28 @@ func (e *NoSuchVersionError) Unwrap() error {
 	return e.Cause
 }
 
+// RefNotFoundError is returned when the origin's own @ref — the branch (or tag /
+// commit) the origin is pinned to — does not exist on the origin: git reports
+// "couldn't find remote ref <ref>" when the fetch of that ref fails. It is the
+// origin-level analog of *NoSuchVersionError (which is a bad --pin on a SKILL),
+// and is distinct from *NotFoundError (the whole repo is missing): here the repo
+// is reachable and authenticated, only the configured @ref is wrong — usually a
+// typo. Origin is the OWNER/REPO[@REF] reference; Ref is the unresolved ref.
+// Presentation-free; Cause carries the raw *GitError for --verbose.
+type RefNotFoundError struct {
+	Origin string
+	Ref    string
+	Cause  error
+}
+
+func (e *RefNotFoundError) Error() string {
+	return fmt.Sprintf("origin ref %q not found", e.Ref)
+}
+
+func (e *RefNotFoundError) Unwrap() error {
+	return e.Cause
+}
+
 // IncompatibleConventionError is returned when the origin's catalog declares a
 // skillrigConvention this binary does not support. The gate is exact-match (C1):
 // only convention 1 is accepted, so any other value — a higher version, a lower
@@ -203,8 +225,8 @@ func (e *IncompatibleConventionError) Error() string {
 }
 
 // ClassifyGitError maps a raw *GitError from a remote fetch onto a typed,
-// renderable failure by matching its captured stderr. The three network classes
-// are the only ones classified here; an unrecognized stderr returns the original
+// renderable failure by matching its captured stderr. The network classes plus a
+// missing origin @ref are classified here; an unrecognized stderr returns the original
 // *GitError unchanged (the CLI surfaces it raw under --verbose). Classification
 // lives in skillcore (the fetch layer), never in internal/cli — the prose
 // what/why/fix is the CLI's job, the failure CLASS is skillcore's. The returned
@@ -251,6 +273,11 @@ func ClassifyGitError(err *GitError) error {
 		return &UnreachableError{Cause: err}
 	case isRepoNotFound(stderr):
 		return &NotFoundError{Cause: err}
+	case strings.Contains(stderr, "couldn't find remote ref"):
+		// `git fetch origin <ref>` of a non-existent origin @ref (a typo'd branch)
+		// — the repo is reachable, only the ref is wrong. Anchored distinctly so the
+		// CLI can point at the @ref, not send the user to re-check the whole origin.
+		return &RefNotFoundError{Cause: err}
 	default:
 		return err
 	}

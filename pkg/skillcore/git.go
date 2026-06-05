@@ -309,12 +309,20 @@ func (e *fetchStepError) Unwrap() error { return e.err }
 
 // FetchFile fetches the bytes of a single repo-relative file from repoURL at ref
 // without materializing a working tree: it clones partial + no-checkout into a
-// fresh temp dir, then `git show <ref>:<file>` streams the blob (the partial
-// clone fetches just that object on demand). token is injected per invocation via
-// the GIT_CONFIG http.extraHeader env (kept out of argv) when non-empty (research
-// D4/D7). It is the catalog fetch's
+// fresh temp dir, materializes ref with `git fetch origin <ref>`, then `git show
+// FETCH_HEAD:<file>` streams the blob (the partial clone fetches just that object
+// on demand). token is injected per invocation via the GIT_CONFIG http.extraHeader
+// env (kept out of argv) when non-empty (research D4/D7). It is the catalog fetch's
 // transport (FetchCatalog) — one git transport for both the skill subtree and
 // index.json. The temp dir is removed before returning; only the bytes survive.
+//
+// The explicit fetch is load-bearing for an origin pinned to a non-default BRANCH
+// (OWNER/REPO@branch). A fresh clone creates a local ref only for the default
+// branch; every other branch is just refs/remotes/origin/<branch>, so a bare
+// `<branch>` does not resolve and `git show <branch>:<file>` fails with "invalid
+// object name". Fetching the ref sets FETCH_HEAD to its commit regardless of ref
+// type (branch / tag / SHA / HEAD), mirroring how fetchSparseInto materializes an
+// off-tip ref for the skill subtree (FIX-6).
 func (c *gitClient) FetchFile(
 	ctx context.Context,
 	repoURL, file, ref, token string,
@@ -345,7 +353,16 @@ func (c *gitClient) FetchFile(
 	}
 
 	// The token rides in the GIT_CONFIG env (kept out of argv), not a `-c` flag.
-	out, err := c.runEnv(ctx, authConfigEnv(token), "-C", tmpDir, "show", ref+":"+file)
+	auth := authConfigEnv(token)
+
+	// Materialize ref into FETCH_HEAD so the show below resolves a non-default
+	// branch (which a fresh clone leaves only as refs/remotes/origin/<branch>).
+	// An unreachable/missing ref or repo fails here — a clone-phase repo problem.
+	if _, err := c.runEnv(ctx, auth, "-C", tmpDir, "fetch", "--depth", "1", "origin", ref); err != nil {
+		return nil, &fetchStepError{step: stepClone, err: err}
+	}
+
+	out, err := c.runEnv(ctx, auth, "-C", tmpDir, "show", "FETCH_HEAD:"+file)
 	if err != nil {
 		return nil, &fetchStepError{step: stepCheckout, err: err}
 	}

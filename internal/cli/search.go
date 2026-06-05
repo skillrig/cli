@@ -258,6 +258,11 @@ func mapSearchError(origin string, err error) error {
 		return mapNotFoundError("", notFound, err)
 	}
 
+	var refNotFound *skillcore.RefNotFoundError
+	if errors.As(err, &refNotFound) {
+		return mapRefNotFoundError(refNotFound.Origin, refNotFound.Ref, err)
+	}
+
 	var readErr *catalogReadError
 	if errors.As(err, &readErr) {
 		return &UsageError{
