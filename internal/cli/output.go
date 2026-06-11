@@ -184,18 +184,41 @@ func renderSearchResult(w io.Writer, origin string, matches []skillcore.CatalogE
 	return err
 }
 
+// cellSanitizer neutralizes characters that would corrupt the tabwriter layout:
+// a tab inside a cell is read by tabwriter as a column separator, and a newline
+// or carriage-return breaks the one-row-per-line invariant. Each is replaced
+// with a single space so cell content can never inject extra columns or rows —
+// catalog descriptions and skill names are taken verbatim from manifests/paths
+// and are not guaranteed control-character-free (PR #22 review).
+var cellSanitizer = strings.NewReplacer("\t", " ", "\n", " ", "\r", " ")
+
 // writeAlignedColumns renders rows as space-padded, fixed-width columns via the
 // stdlib text/tabwriter (elastic tabstops) so columns line up across rows in
 // compact human output. It is the one shared table renderer for search and the
-// verify failure list — no duplicated tabwriter setup. Each row's cells are
-// tab-joined; the final cell is newline-terminated, so it is never right-padded
-// (no trailing whitespace). Cell width is counted in runes (tabwriter assumes
-// equal-width code points), matching truncateDesc's rune budget so the column
-// math and the clip agree. An empty rows slice writes nothing.
+// verify failure list — no duplicated tabwriter setup. Each cell is sanitized of
+// tabs/newlines (see cellSanitizer) and then tab-joined; the final cell is
+// newline-terminated, so it is never right-padded (no trailing whitespace). Cell
+// width is counted in runes (tabwriter assumes equal-width code points),
+// matching truncateDesc's rune budget so the column math and the clip agree. An
+// empty rows slice writes nothing.
 func writeAlignedColumns(w io.Writer, rows [][]string) error {
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	// tabwriter params: minwidth, tabwidth, padding, padchar, flags.
+	tw := tabwriter.NewWriter(
+		w,
+		0,   // minwidth
+		0,   // tabwidth
+		2,   // padding: spaces between columns
+		' ', // padchar
+		0,   // flags
+	)
+
 	for _, cells := range rows {
-		if _, err := fmt.Fprintln(tw, strings.Join(cells, "\t")); err != nil {
+		clean := make([]string, len(cells))
+		for i, c := range cells {
+			clean[i] = cellSanitizer.Replace(c)
+		}
+
+		if _, err := fmt.Fprintln(tw, strings.Join(clean, "\t")); err != nil {
 			return err
 		}
 	}
